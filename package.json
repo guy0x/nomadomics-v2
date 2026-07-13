@@ -1,0 +1,20 @@
+{
+  "name": "nomadomics-strapi",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Strapi backend for Nomadomics 2.0",
+  "scripts": {
+    "dev": "strapi dev",
+    "start": "strapi start",
+    "build": "strapi build",
+    "postinstall": "strapi build"
+  },
+  "dependencies": {
+    "@strapi/strapi": "^5.49.0",
+    "@strapi/plugin-graphql": "^5.49.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}

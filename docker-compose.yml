@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nomadomics-postgres
+    environment:
+      POSTGRES_DB: nomadomics
+      POSTGRES_USER: nomadomics
+      POSTGRES_PASSWORD: nomadomics_dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  strapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.strapi
+    container_name: nomadomics-strapi
+    env_file: .env.strapi
+    volumes:
+      - ./strapi-app:/srv/app
+      - ./uploads:/srv/app/public/uploads
+    ports:
+      - "1337:1337"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

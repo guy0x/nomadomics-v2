@@ -1,0 +1,21 @@
+FROM node:20-alpine
+
+WORKDIR /srv/app
+
+# Install dependencies
+RUN npm install -g npm@latest pm2
+
+# Copy package files first for caching
+COPY package.json package-lock.json* ./
+
+# Install Strapi app
+RUN npm install
+
+# Copy source
+COPY . .
+
+# Expose port
+EXPOSE 1337
+
+# Run in production mode
+CMD ["npm", "run", "start"]
