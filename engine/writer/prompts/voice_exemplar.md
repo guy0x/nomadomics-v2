@@ -1,6 +1,6 @@
 # Voice Exemplar — Nomadomics
 
-> Source corpus: `reference/wp-articles/*.md` (11 posts, dated 2024-12 → 2025-09).
+> Source corpus: `reference/wp-articles/*.md` (12 posts, dated 2024-12 → 2025-09).
 > Generated: 2026-07-13. Use this as the authoritative voice anchor when generating new articles.
 
 ---
