@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Strapi runtime + build artefacts
+.strapi/
+.strapi-updater.json
+.cache/
+build/
+dist/
+.tmp/
+
+# Public uploads (media lives in DB or object storage, not git)
+public/uploads/
+
+# Generated TS types from TS source
+types/
+
+# Local Postgres data, log noise
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+
+# Local env files (use .env.example for templates)
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+
+# Postgres volume (if Docker ever runs)
+postgres_data/
