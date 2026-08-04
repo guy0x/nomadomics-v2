@@ -26,6 +26,7 @@ yarn-error.log*
 # Local env files (use .env.example for templates)
 .env
 .env.local
+.env.strapi
 
 # IDE
 .idea/
@@ -33,3 +34,6 @@ yarn-error.log*
 
 # Postgres volume (if Docker ever runs)
 postgres_data/
+
+# Python bytecode cache
+__pycache__/
