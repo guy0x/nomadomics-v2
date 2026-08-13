@@ -37,15 +37,19 @@ class Config:
     strapi_engine_token: str
     openrouter_api_key: str
     # Model rule: FREE MODELS ONLY until production (Guy 2026-08-11)
-    research_model: str = "qwen/qwen3-32b:free"
-    draft_model: str = "google/gemma-3-27b-it:free"
+    # Verified against OpenRouter catalog 2026-08-11 — qwen3-32b:free no longer
+    # exists. gemma-4-26b-a4b-it:free confirmed working live; gemma-4-31b-it:free
+    # is the stronger writer but has been intermittently rate-limited upstream
+    # (2026-08-11), so it sits in fallback, not primary.
+    research_model: str = "google/gemma-4-26b-a4b-it:free"
+    draft_model: str = "google/gemma-4-26b-a4b-it:free"
     premium_model: str = "google/gemini-2.5-pro"  # gated: only for final-draft polish
     premium_enabled: bool = False  # False until Guy flips to production
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     fallback_models: tuple = (
-        "google/gemma-3-27b-it:free",
+        "google/gemma-4-31b-it:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "openrouter/auto:free",
+        "nvidia/nemotron-nano-12b-v2-vl:free",
     )
     # Trust-ladder defaults (overridable per run)
     auto_publish_threshold: int = 80
