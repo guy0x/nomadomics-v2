@@ -1,0 +1,1 @@
+"""Nomadomics engine — writer package."""
