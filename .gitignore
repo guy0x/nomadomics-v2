@@ -37,3 +37,7 @@ postgres_data/
 
 # Python bytecode cache
 __pycache__/
+
+.venv/
+__pycache__/
+
