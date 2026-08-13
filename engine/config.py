@@ -1,0 +1,92 @@
+"""Nomadomics engine — configuration loader.
+
+Loads settings from the project `.env` (gitignored) without ever printing key
+values. Enforces Guy's 2026-08-11 model rule: the OpenRouter key is allowed to
+call FREE (:free) models only during the testing phase; premium is gated.
+
+Never import this outside the engine package without reason. All key values
+live in-memory only and are masked in any repr/log output.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+
+def _load_dotenv(path: Path = ENV_PATH) -> dict[str, str]:
+    """Minimal .env parser (no external dep). Returns only the parsed pairs."""
+    parsed: dict[str, str] = {}
+    if not path.exists():
+        return parsed
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        parsed[key.strip()] = val.strip()
+    return parsed
+
+
+@dataclass(frozen=True)
+class Config:
+    strapi_url: str
+    strapi_engine_token: str
+    openrouter_api_key: str
+    # Model rule: FREE MODELS ONLY until production (Guy 2026-08-11)
+    research_model: str = "qwen/qwen3-32b:free"
+    draft_model: str = "google/gemma-3-27b-it:free"
+    premium_model: str = "google/gemini-2.5-pro"  # gated: only for final-draft polish
+    premium_enabled: bool = False  # False until Guy flips to production
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    fallback_models: tuple = (
+        "google/gemma-3-27b-it:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/auto:free",
+    )
+    # Trust-ladder defaults (overridable per run)
+    auto_publish_threshold: int = 80
+    needs_review_min: int = 60
+    reject_below: int = 60
+    first_n_human_review: int = 3  # first N articles require Guy sign-off
+    _secret_fields: tuple = field(default=("strapi_engine_token", "openrouter_api_key"), repr=False)
+
+    def is_free_model(self, model: str | None = None) -> bool:
+        m = model or self.draft_model
+        return m.endswith(":free") or "free" in m.lower()
+
+
+def load_config(*, env_path: Path = ENV_PATH) -> Config:
+    """Build Config from the project .env. Raises if required keys are missing."""
+    env = _load_dotenv(env_path)
+    missing = [k for k in ("STRAPI_ENGINE_TOKEN", "OPENROUTER_API_KEY") if not env.get(k)]
+    if missing:
+        raise RuntimeError(
+            f"Missing required env keys in {env_path}: {', '.join(missing)}. "
+            "Add them to the gitignored .env (never commit)."
+        )
+    premium = env.get("PREMIUM_MODEL_ENABLED", "").strip().lower() in ("1", "true", "yes")
+    return Config(
+        strapi_url=env.get("STRAPI_URL", "http://localhost:1337").rstrip("/"),
+        strapi_engine_token=env["STRAPI_ENGINE_TOKEN"],
+        openrouter_api_key=env["OPENROUTER_API_KEY"],
+        premium_enabled=premium,
+    )
+
+
+def redact(config: Config) -> dict:
+    """Config as a safe dict with secret values masked (for logs / reports)."""
+    return {
+        "strapi_url": config.strapi_url,
+        "research_model": config.research_model,
+        "draft_model": config.draft_model,
+        "premium_model": config.premium_model,
+        "premium_enabled": config.premium_enabled,
+        "auto_publish_threshold": config.auto_publish_threshold,
+        "is_free_testing_mode": all(
+            config.is_free_model(m) for m in (config.research_model, config.draft_model)
+        ) and not config.premium_enabled,
+    }
