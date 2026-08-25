@@ -25,7 +25,7 @@
       "type": "string"
     },
     "targetKeywords": {
-      "type": "json"
+      "type": "string"
     },
     "category": {
       "type": "enumeration",
@@ -48,7 +48,7 @@
       "type": "text"
     },
     "researchFacts": {
-      "type": "json"
+      "type": "text"
     },
     "lastError": {
       "type": "text"

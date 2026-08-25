@@ -31,7 +31,7 @@
       "required": true
     },
     "targetKeywords": {
-      "type": "json"
+      "type": "string"
     },
     "metaTitle": {
       "type": "string",
