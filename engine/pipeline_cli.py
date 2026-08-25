@@ -46,11 +46,18 @@ def _attrs(doc: dict) -> dict:
 def _topic_payload(topic: dict) -> dict:
     """Extract useful fields from a Strapi topic document (flat v5 shape)."""
     a = _attrs(topic)
+    raw_kw = a.get("targetKeywords")
+    if isinstance(raw_kw, list):
+        kw_list = raw_kw
+    elif isinstance(raw_kw, str) and raw_kw.strip():
+        kw_list = [k.strip() for k in raw_kw.split(",") if k.strip()]
+    else:
+        kw_list = []
     return {
         "slug": a.get("slug"),
         "title": a.get("title"),
         "primaryKeyword": a.get("primaryKeyword"),
-        "targetKeywords": a.get("targetKeywords") or [],
+        "targetKeywords": kw_list,
         "category": a.get("category"),
         "targetWordCount": a.get("targetWordCount") or 1800,
         "documentId": topic.get("documentId"),
@@ -98,12 +105,16 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     )
 
     # write to Strapi
+    kw_val = topic["targetKeywords"]
+    if isinstance(kw_val, list):
+        kw_val = ", ".join(kw_val)
+
     article = client.create_article(
         {
             "title": topic["title"],
             "slug": topic["slug"],
             "bodyMarkdown": draft.markdown,
-            "targetKeywords": topic["targetKeywords"],
+            "targetKeywords": kw_val,
             "focusKeyword": primary,
             "metaTitle": seo.meta_title,
             "metaDescription": seo.meta_description,
@@ -116,18 +127,13 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     article_doc = article.get("data", {})
     article_id = article_doc.get("documentId")
 
-    # apply policy-determined status if auto_publish (still set publishedAt)
-    # NOTE: we store policy decision, but actual publish is a G9/G10 gate.
-    client.update_article(
-        article_id,
-        {"status": "in_review" if decision.decision.value != "auto_publish" else "published"},
-    )
+    # v1 rule: automation NEVER publishes. Record the policy decision for the
+    # dashboard/state log, but every article lands in_review for Guy's gate.
+    client.update_article(article_id, {"status": "in_review"})
 
     # mark topic
     topic_status = "in_review"
-    if decision.decision.value == "auto_publish":
-        topic_status = "published"
-    elif decision.decision.value == "reject":
+    if decision.decision.value == "reject":
         topic_status = "failed"
         client.update_article(article_id, {"status": "rejected"})
     elif decision.decision.value == "quarantine":
