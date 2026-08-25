@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nomadomics 2.0 — Mission Control & Content Engine</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card: #121824;
+      --card-hover: #172030;
+      --border: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.15);
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --strapi: #4945ff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 24px 32px;
+      line-height: 1.5;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 28px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .brand-logo {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), #6366f1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      font-weight: 800;
+      color: #0b0f19;
+    }
+    .brand-title {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .brand-sub {
+      color: var(--muted);
+      font-size: 13.5px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+    }
+    .btn-strapi {
+      background: var(--strapi);
+      color: white;
+      box-shadow: 0 4px 14px rgba(73, 69, 255, 0.3);
+    }
+    .btn-strapi:hover { background: #3c38e6; }
+    .btn-primary {
+      background: var(--accent);
+      color: #0b0f19;
+    }
+    .btn-primary:hover { background: #0284c7; color: white; }
+    .btn-secondary {
+      background: #1e293b;
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover { background: #334155; }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #1e293b;
+      border: 1px solid var(--border);
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .dot.online { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+    .dot.offline { background: var(--danger); }
+
+    /* Metrics Grid */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .metric-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 20px;
+    }
+    .metric-title {
+      font-size: 13px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }
+    .metric-value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .metric-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Main Dashboard Layout */
+    .layout-grid {
+      display: grid;
+      grid-template-columns: 2fr 1.2fr;
+      gap: 24px;
+    }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 24px;
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-title {
+      font-size: 17px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Table Styles */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+    }
+    th {
+      text-align: left;
+      padding: 10px 12px;
+      color: var(--muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--card-hover); }
+
+    .tag {
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .tag-draft { background: rgba(56, 189, 248, 0.15); color: var(--accent); }
+    .tag-review { background: rgba(245, 158, 11, 0.15); color: var(--warn); }
+    .tag-published { background: rgba(16, 185, 129, 0.15); color: var(--ok); }
+    .tag-pending { background: rgba(148, 163, 184, 0.15); color: var(--muted); }
+
+    /* Pipeline Logs */
+    .log-entry {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #0f141f;
+      border: 1px solid var(--border);
+      margin-bottom: 8px;
+      font-size: 12.5px;
+      font-family: monospace;
+    }
+    .log-ts { color: var(--muted); margin-right: 8px; }
+    .log-event { font-weight: 600; color: var(--accent); }
+
+    /* Control Forms */
+    .form-group {
+      margin-bottom: 14px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .form-group input, .form-group select {
+      width: 100%;
+      background: #0f141f;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      outline: none;
+    }
+    .form-group input:focus, .form-group select:focus {
+      border-color: var(--accent);
+    }
+
+    .governance-card {
+      background: #0f141f;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .governance-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .governance-row:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-logo">N</div>
+      <div>
+        <div class="brand-title">Nomadomics 2.0</div>
+        <div class="brand-sub">Autonomous SEO Content Engine & Mission Control</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="status-pill">
+        <span class="dot online" id="strapi-dot"></span>
+        <span id="strapi-status-text">Strapi Online</span>
+      </div>
+      <a href="http://localhost:1337/admin" target="_blank" class="btn btn-strapi">
+        <span>⚡ Open Strapi CMS Admin</span>
+      </a>
+      <button class="btn btn-primary" onclick="triggerBatch(1)">
+        <span>▶ Draft Next Topic</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Key Metrics Row -->
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-title">Drafts Ready for Review</div>
+      <div class="metric-value" id="m-drafts">0</div>
+      <div class="metric-sub">Pending human sign-off</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Topic Queue (Seeds)</div>
+      <div class="metric-value" id="m-topics">0</div>
+      <div class="metric-sub">Ready in pipeline</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Published Articles</div>
+      <div class="metric-value" id="m-published">0</div>
+      <div class="metric-sub">Live on Strapi</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">Avg Confidence Score</div>
+      <div class="metric-value" id="m-confidence">0%</div>
+      <div class="metric-sub">SEO & Fact checking</div>
+    </div>
+  </div>
+
+  <div class="layout-grid">
+    <!-- Left Column: Content Pipeline & Drafts -->
+    <div>
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">📄 Draft Articles in Strapi (Review Queue)</div>
+          <button class="btn btn-secondary" onclick="loadDashboard()">↻ Refresh</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Status</th>
+              <th>SEO</th>
+              <th>Confidence</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="articles-table-body">
+            <tr><td colspan="5" style="text-align: center; color: var(--muted);">Loading drafts...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🎯 Topic Queue & Research Roadmap</div>
+          <button class="btn btn-secondary" onclick="triggerBatch(3)">Draft Next 3 Topics</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Topic Title</th>
+              <th>Category</th>
+              <th>Keyword</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="topics-table-body">
+            <tr><td colspan="4" style="text-align: center; color: var(--muted);">Loading topics...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Right Column: Mission Control, Controls, & Governance -->
+    <div>
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">⚡ Content Engine Controller</div>
+        </div>
+        <div class="form-group">
+          <label>Add New Seed Topic</label>
+          <input type="text" id="new-topic-title" placeholder="e.g. Best Coworking Spaces in Lisbon">
+        </div>
+        <div class="form-group">
+          <label>Primary Keyword</label>
+          <input type="text" id="new-topic-keyword" placeholder="e.g. coworking spaces lisbon">
+        </div>
+        <div class="form-group">
+          <label>Category</label>
+          <select id="new-topic-category">
+            <option value="digital-nomad">Digital Nomad</option>
+            <option value="geoarbitrage">Geoarbitrage</option>
+            <option value="banking">Banking & Money</option>
+            <option value="taxes">Taxes</option>
+            <option value="visas">Visas</option>
+            <option value="backpacking">Backpacking</option>
+            <option value="gear">Travel Gear</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" style="width: 100%; justify-content: center;" onclick="addTopic()">+ Add Topic to Pipeline</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🛡️ Agent Governance & Model Routing</div>
+        </div>
+        <div class="governance-card">
+          <div class="governance-row">
+            <span style="color: var(--muted);">Research Model:</span>
+            <strong id="gov-res-model">google/gemma-4-26b-a4b-it:free</strong>
+          </div>
+          <div class="governance-row">
+            <span style="color: var(--muted);">Drafting Model:</span>
+            <strong id="gov-draft-model">google/gemma-4-26b-a4b-it:free</strong>
+          </div>
+          <div class="governance-row">
+            <span style="color: var(--muted);">Premium Tier:</span>
+            <span class="tag tag-pending" id="gov-premium">Disabled ($0 Test Mode)</span>
+          </div>
+          <div class="governance-row">
+            <span style="color: var(--muted);">Auto-Publish Floor:</span>
+            <span>Confidence &ge; 80 (Post-Review)</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">📡 Real-Time Pipeline Telemetry</div>
+        </div>
+        <div id="logs-container">
+          <div style="color: var(--muted); font-size: 13px;">No pipeline events yet.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadDashboard() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+
+        // Metrics
+        document.getElementById('m-drafts').innerText = data.stats.drafts_in_review;
+        document.getElementById('m-topics').innerText = data.stats.pending_topics;
+        document.getElementById('m-published').innerText = data.stats.published;
+        document.getElementById('m-confidence').innerText = data.stats.avg_confidence + '%';
+
+        // Strapi status
+        const isOk = data.system.strapi_status === 'online';
+        document.getElementById('strapi-dot').className = isOk ? 'dot online' : 'dot offline';
+        document.getElementById('strapi-status-text').innerText = isOk ? 'Strapi Online' : 'Strapi Offline';
+
+        // Governance
+        document.getElementById('gov-res-model').innerText = data.system.config.research_model;
+        document.getElementById('gov-draft-model').innerText = data.system.config.draft_model;
+        document.getElementById('gov-premium').innerText = data.system.config.premium_enabled ? 'Active' : 'Disabled (Free Testing Mode)';
+
+        // Articles Table
+        const aTable = document.getElementById('articles-table-body');
+        if (data.articles.length === 0) {
+          aTable.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--muted);">No articles in Strapi yet.</td></tr>';
+        } else {
+          aTable.innerHTML = data.articles.map(a => `
+            <tr>
+              <td><strong>${a.title}</strong><br><span style="font-size: 11.5px; color: var(--muted);">${a.slug}</span></td>
+              <td><span class="tag ${a.status === 'published' ? 'tag-published' : a.status === 'in_review' ? 'tag-review' : 'tag-draft'}">${a.status}</span></td>
+              <td><strong>${a.seoScore || '-'}</strong>/100</td>
+              <td><strong>${a.confidence || '-'}%</strong></td>
+              <td><a href="http://localhost:1337/admin/content-manager/collection-types/api::article.article/${a.documentId}" target="_blank" class="btn btn-secondary" style="padding: 4px 10px; font-size: 12px;">Review in Strapi &rarr;</a></td>
+            </tr>
+          `).join('');
+        }
+
+        // Topics Table
+        const tTable = document.getElementById('topics-table-body');
+        if (data.topics.length === 0) {
+          tTable.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--muted);">Topic queue empty.</td></tr>';
+        } else {
+          tTable.innerHTML = data.topics.slice(0, 10).map(t => `
+            <tr>
+              <td>${t.title}</td>
+              <td><span class="tag tag-draft">${t.category || 'general'}</span></td>
+              <td style="color: var(--muted);">${t.primaryKeyword || '-'}</td>
+              <td><span class="tag ${t.status === 'pending' ? 'tag-pending' : 'tag-review'}">${t.status}</span></td>
+            </tr>
+          `).join('');
+        }
+
+        // Telemetry Logs
+        const lCont = document.getElementById('logs-container');
+        if (data.logs.length === 0) {
+          lCont.innerHTML = '<div style="color: var(--muted); font-size: 13px;">No recent events.</div>';
+        } else {
+          lCont.innerHTML = data.logs.slice(0, 5).map(l => `
+            <div class="log-entry">
+              <span class="log-ts">${l.ts ? l.ts.slice(11, 19) : ''}</span>
+              <span class="log-event">[${l.event}]</span> ${l.slug || ''} ${l.confidence ? '(conf=' + l.confidence + ')' : ''}
+            </div>
+          `).join('');
+        }
+
+      } catch (err) {
+        console.error('Failed to load dashboard:', err);
+      }
+    }
+
+    async function triggerBatch(count) {
+      alert(`Triggering batch generation of ${count} topic(s) using free models... Refresh dashboard in ~1 minute.`);
+      await fetch('/api/run-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count })
+      });
+      setTimeout(loadDashboard, 3000);
+    }
+
+    async function addTopic() {
+      const title = document.getElementById('new-topic-title').value;
+      const keyword = document.getElementById('new-topic-keyword').value;
+      const category = document.getElementById('new-topic-category').value;
+      if (!title) { alert('Please enter a topic title'); return; }
+
+      await fetch('/api/topics/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, primaryKeyword: keyword, category })
+      });
+
+      document.getElementById('new-topic-title').value = '';
+      document.getElementById('new-topic-keyword').value = '';
+      loadDashboard();
+    }
+
+    // Initial load
+    loadDashboard();
+    setInterval(loadDashboard, 15000);
+  </script>
+</body>
+</html>
