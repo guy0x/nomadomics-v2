@@ -28,6 +28,7 @@ from typing import Optional
 import httpx
 
 from config import Config
+from llm import endpoint_for, headers_for, resolve, stage_chain
 
 RESEARCH_SYSTEM_PROMPT = """You are a travel-finance research assistant for a money-savvy travel blog (Nomadomics).
 
@@ -157,7 +158,6 @@ def _fallback_models(cfg: Config) -> list[str]:
             seen.append(m)
     return seen
 
-
 def research_topic(
     topic: str,
     primary_keyword: str = "",
@@ -179,9 +179,11 @@ def research_topic(
         client = httpx.Client(timeout=60)
         own_client = True
 
-    models_to_try = [model] if model else _fallback_models(cfg)
+    # Explicit model -> single (provider, model). Otherwise the stage chain
+    # (Gemini primary -> OpenRouter fallback).
+    chain = [(None, model)] if model else stage_chain(cfg, "research")
     payload = {
-        "model": models_to_try[0],
+        "model": None,  # set per attempt
         "messages": [
             {"role": "system", "content": RESEARCH_SYSTEM_PROMPT},
             {
@@ -196,20 +198,17 @@ def research_topic(
         "temperature": 0.3,
         "response_format": {"type": "json_object"},
     }
-    headers = {
-        "Authorization": f"Bearer {cfg.openrouter_api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://nomadomics.local",
-        "X-Title": "Nomadomics Engine",
-    }
 
     last_err: Exception | None = None
     try:
-        for model_id in models_to_try:
+        for entry in chain:
+            provider, model_id = resolve(cfg, entry)
+            base_url, _ = endpoint_for(cfg, provider)
+            headers = headers_for(cfg, provider)
             payload["model"] = model_id
             for attempt in range(max_retries + 1):
                 try:
-                    resp = client.post(f"{cfg.openrouter_base_url}/chat/completions", json=payload, headers=headers)
+                    resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
                     if resp.status_code == 429:
                         time.sleep(1.5 * (attempt + 1))
                         continue

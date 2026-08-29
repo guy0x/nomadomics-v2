@@ -35,6 +35,7 @@ class SEOReport:
     voice_score: int = 0
     factual_score: int = 0
     research_score: int = 0
+    structure_score: int = 0
     breakdown: dict = field(default_factory=dict)
 
 
@@ -42,6 +43,57 @@ def _count_keyword(text: str, keyword: str) -> int:
     if not keyword:
         return 0
     return len(re.findall(re.escape(keyword.lower()), text.lower()))
+
+
+def _structure_score(md: str) -> int:
+    """Structural richness 0-100: comparison tables, bullet blocks, H3 density,
+    and Pros/Cons sections. Rewards the structure contract (writer/editor prompt),
+    penalizing walls of prose."""
+    lines = md.splitlines()
+    tables = 0
+    bullet_blocks = 0
+    n_h3 = 0
+    has_pros = has_cons = False
+    in_bullet_block = False
+
+    for line in lines:
+        s = line.strip()
+        # Markdown table separator row (| --- | --- |) — one per table.
+        if s.startswith("|") and "---" in s and re.match(r"^\|[\s:|-]+\|$", s):
+            tables += 1
+        # Consecutive bullet lines count as one block.
+        if re.match(r"^[-*•]\s+\S", s):
+            if not in_bullet_block:
+                bullet_blocks += 1
+                in_bullet_block = True
+        else:
+            in_bullet_block = False
+        if s.startswith("### "):
+            n_h3 += 1
+        low = s.lower().rstrip(":")
+        if low in ("### pros", "pros", "**pros**"):
+            has_pros = True
+        if low in ("### cons", "cons", "**cons**"):
+            has_cons = True
+
+    score = 0
+    if tables >= 1:
+        score += 30
+    if bullet_blocks >= 4:
+        score += 30
+    elif bullet_blocks >= 2:
+        score += 20
+    elif bullet_blocks >= 1:
+        score += 10
+    if n_h3 >= 4:
+        score += 15
+    elif n_h3 >= 1:
+        score += 8
+    if has_pros and has_cons:
+        score += 25
+    elif has_pros or has_cons:
+        score += 12
+    return min(100, score)
 
 
 def _h1s(md: str) -> list[str]:
@@ -124,6 +176,15 @@ def analyze_seo(
     if 140 <= len(meta_desc) <= 160:
         add(10, "meta description 140-160 chars")
 
+    # Structure bonus: tables/bullets/H3/pros-cons raise the on-page SEO score.
+    structure = _structure_score(body)
+    if structure >= 40:
+        add(15, f"rich structure (tables/bullets/pros-cons) +{structure//4}")
+    elif structure >= 15:
+        add(8, f"some structure +{structure//4}")
+    elif structure > 0:
+        add(4, f"minimal structure +{structure//4}")
+
     seo_score = min(100, points)
 
     # Voice heuristic (crude: detect voice markers from exemplar)
@@ -140,6 +201,7 @@ def analyze_seo(
     fixes = _build_fixes(
         seo_score, has_h1_kw=has_h1_kw, n_h2=len(h2s), n_faq=len(faqs),
         wc=wc, meta_title=meta_title, meta_desc=meta_desc, density=density,
+        structure=structure,
     )
 
     return SEOReport(
@@ -152,10 +214,12 @@ def analyze_seo(
         voice_score=voice_score,
         factual_score=factual_score,
         research_score=research_score,
+        structure_score=structure,
         breakdown={
             "h1_kw": has_h1_kw, "n_h2": len(h2s), "n_faq": len(faqs),
             "words": wc, "density": round(density, 4),
             "meta_title_len": len(meta_title), "meta_desc_len": len(meta_desc),
+            "structure": structure,
         },
     )
 
@@ -243,8 +307,13 @@ def _research_score(research: Optional[ResearchResult]) -> int:
     return 30
 
 
-def _build_fixes(seo_score, *, has_h1_kw, n_h2, n_faq, wc, meta_title, meta_desc, density):
+def _build_fixes(seo_score, *, has_h1_kw, n_h2, n_faq, wc, meta_title, meta_desc, density, structure=0):
     fixes = []
+    if structure < 40:
+        fixes.append(
+            f"Add structure: bullet lists under headings, a comparison table, and "
+            f"Pros/Cons (structure score {structure}/100)."
+        )
     if seo_score < 70:
         if not has_h1_kw:
             fixes.append("Include the focus keyword in the H1/title.")

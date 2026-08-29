@@ -19,10 +19,11 @@ import sys
 from pathlib import Path
 
 from config import Config, load_config, redact
+from editor.editor import edit_draft
 from research.research import research_topic, validate_research
 from seo.analyze import analyze_seo
 from writer.writer import draft_article
-from policy.publish import apply_policy, is_sensitive
+from policy.publish import Decision, apply_policy, is_sensitive
 from strapi import StrapiClient, StrapiError
 
 STATE_FILE = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
@@ -96,12 +97,24 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
         _append_state({"ts": _now_iso(), "event": "draft_failed", "slug": slug, "error": str(e)})
         raise
 
-    # SEO + confidence
-    seo = analyze_seo(draft, primary, secondary_keywords=topic["targetKeywords"], research=research)
+    # edit (QA/polish pass between draft and scoring — 2b)
+    try:
+        edited = edit_draft(draft, topic["title"], primary, research, config=cfg)
+    except Exception as e:
+        # Editor degrades gracefully internally; this is a last-resort guard.
+        edited = None
+        _append_state({"ts": _now_iso(), "event": "edit_failed", "slug": slug, "error": str(e)})
+
+    to_score = edited if edited is not None else draft
+
+    # SEO + confidence — score the EDITED draft
+    seo = analyze_seo(to_score, primary, secondary_keywords=topic["targetKeywords"], research=research)
+    articles_reviewed = client.count_published()
     decision = apply_policy(
         seo.confidence,
         sensitive=is_sensitive(topic["category"]),
         first_n_human_review=cfg.first_n_human_review,
+        articles_reviewed=articles_reviewed,
     )
 
     # write to Strapi
@@ -113,7 +126,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
         {
             "title": topic["title"],
             "slug": topic["slug"],
-            "bodyMarkdown": draft.markdown,
+            "bodyMarkdown": to_score.markdown,
             "targetKeywords": kw_val,
             "focusKeyword": primary,
             "metaTitle": seo.meta_title,
@@ -127,17 +140,22 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     article_doc = article.get("data", {})
     article_id = article_doc.get("documentId")
 
-    # v1 rule: automation NEVER publishes. Record the policy decision for the
-    # dashboard/state log, but every article lands in_review for Guy's gate.
-    client.update_article(article_id, {"status": "in_review"})
-
-    # mark topic
+    # Publish mapping (J1): confidence-gated auto-publish >=80, only behind the
+    # explicit AUTO_PUBLISH_ENABLED env flag. While the flag is off (default),
+    # the v1 human gate holds and every article lands in_review. Sensitive topics
+    # are structurally quarantined by the policy (QUARANTINE -> never published).
+    published = False
     topic_status = "in_review"
-    if decision.decision.value == "reject":
+    if cfg.auto_publish_enabled and decision.decision == Decision.AUTO_PUBLISH:
+        client.update_article(article_id, {"status": "published", "publishedAt": _now_iso()})
+        topic_status = "published"
+        published = True
+    elif decision.decision == Decision.REJECT:
         topic_status = "failed"
         client.update_article(article_id, {"status": "rejected"})
-    elif decision.decision.value == "quarantine":
-        topic_status = "in_review"
+    else:
+        # QUARANTINE (sensitive) and NEEDS_REVIEW both land in_review for Guy.
+        client.update_article(article_id, {"status": "in_review"})
     client.update_topic(topic["documentId"], {"status": topic_status})
 
     _append_state(
@@ -149,8 +167,10 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
             "seoScore": seo.seo_score,
             "confidence": seo.confidence,
             "decision": decision.decision.value,
+            "published": published,
             "voiceScore": seo.voice_score,
             "factualScore": seo.factual_score,
+            "edit_report": (edited.edit_report if edited else ""),
         }
     )
 
@@ -161,7 +181,9 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
         "seoScore": seo.seo_score,
         "confidence": seo.confidence,
         "decision": decision.decision.value,
-        "words": draft.word_count,
+        "published": published,
+        "words": to_score.word_count,
+        "edit_report": (edited.edit_report if edited else ""),
     }
 
 
@@ -210,7 +232,8 @@ def main(argv: list[str] | None = None) -> int:
             results = run_batch(client, cfg, n)
             print(f"Processed {len(results)} topic(s).")
             for r in results:
-                print(f'  - {r["title"]} | conf={r["confidence"]} | {r["decision"]}')
+                state = "PUBLISHED" if r.get("published") else r["decision"]
+                print(f'  - {r["title"]} | conf={r["confidence"]} | {state}')
             return 0
 
         if cmd == "drafts":

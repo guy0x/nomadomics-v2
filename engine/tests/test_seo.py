@@ -91,3 +91,38 @@ def test_breakdown_fields_present():
     assert "n_faq" in report.breakdown
     assert "words" in report.breakdown
     assert "density" in report.breakdown
+    assert "structure" in report.breakdown
+
+
+def test_rich_structure_scores_higher_than_prose_wall():
+    rich = (
+        "# Best eSIM Plans for Digital Nomads in 2026\n\n"
+        "Picture this: you land in Bangkok and roaming just billed you $50. "
+        "An eSIM cuts that to $15.\n\n"
+        "## Airalo\n"
+        "- 200+ countries\n"
+        "- Plans from $15\n"
+        "- Instant QR activation\n\n"
+        "## Holafly\n"
+        "- Unlimited data\n"
+        "- 100+ countries\n"
+        "- No speed caps\n\n"
+        "### Pros\n- Cheap\n- Easy\n\n"
+        "### Cons\n- No phone number\n\n"
+        "## Comparison\n"
+        "| Provider | Countries | Price |\n"
+        "| --- | --- | --- |\n"
+        "| Airalo | 200+ | $15 |\n"
+        "| Holafly | 100+ | $19 |\n\n"
+        "## FAQ\n"
+        "### Is eSIM better than roaming?\nYes.\n"
+        "### Can I keep my number?\nYes.\n"
+        "### How much does it cost?\nAbout $15.\n"
+    )
+    rich_draft = ArticleDraft(markdown=rich, word_count=len(rich.split()))
+    rich_draft.used_facts = [f.claim for f in make_research().facts]
+    report = analyze_seo(rich_draft, "eSIM travel", research=make_research())
+    assert report.structure_score >= 50
+    # wall of prose has near-zero structure
+    poor = analyze_seo(make_hard_draft(), "eSIM travel", research=make_research())
+    assert rich_draft and report.structure_score > poor.structure_score

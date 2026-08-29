@@ -91,6 +91,19 @@ class StrapiClient:
         )
         return data.get("data", [])
 
+    def count_published(self) -> int:
+        """Number of published articles (proxy for human-reviewed articles —
+        feeds the trust-ladder `articles_reviewed` count)."""
+        data = self._request(
+            "GET",
+            "/api/articles",
+            params={
+                "filters[status][$eq]": "published",
+                "pagination[pageSize]": 1,
+            },
+        )
+        return int((data.get("meta") or {}).get("pagination", {}).get("total", 0))
+
     def close(self):
         import httpx
 

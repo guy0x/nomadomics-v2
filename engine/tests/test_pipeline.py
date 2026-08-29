@@ -53,6 +53,9 @@ class FakeStrapi:
     def update_article(self, doc_id, fields):
         self.published.append((doc_id, fields))
 
+    def count_published(self):
+        return 0
+
     def close(self):
         pass
 
@@ -108,6 +111,18 @@ def test_draft_one_chains_stages_and_writes_article(monkeypatch):
             used_facts=["The FEIE allows expats to exclude up to $126,500."],
         ),
     )
+    # Editor stage: pass-through (edited == drafted) so no HTTP is touched.
+    from editor.editor import EditedDraft
+
+    monkeypatch.setattr(
+        pipeline_cli, "edit_draft",
+        lambda draft, topic, kw, research, config=None, **k: EditedDraft(
+            markdown=draft.markdown,
+            word_count=draft.word_count,
+            used_facts=list(draft.used_facts),
+            edit_report="test pass-through",
+        ),
+    )
 
     result = draft_one(client, cfg, "feie-guide")
 
@@ -129,3 +144,134 @@ def test_draft_one_chains_stages_and_writes_article(monkeypatch):
     article_statuses = [s[1].get("status") for s in client.published]
     assert "published" not in article_statuses
     assert article_statuses  # an in_review/rejected status was set
+
+
+def _make_high_conf_draft():
+    body = (
+        "# Best eSIM Travel Plans for Budget Digital Nomads in 2026\n\n"
+        "Picture this: you land in Tokyo, and eSIM travel saves you $100 per border. "
+        "Here's the thing — roaming is a scam you don't have to pay. eSIM travel for "
+        "digital nomads cuts costs by 80%.\n\n"
+        "## Top eSIM Plans\n"
+        "Airalo covers 200+ countries from $15.\n"
+        "## Holafly\n"
+        "Holafly has unlimited data plans.\n"
+        "## Nomad\n"
+        "Nomad sells regional packages.\n"
+        "## Saily\n"
+        "Saily is the newest budget pick.\n\n"
+        "## FAQ\n"
+        "### Is eSIM better than roaming?\nYes, much cheaper.\n"
+        "### Can I keep my number?\nYes.\n"
+        "### How much does it cost?\nAbout $15.\n"
+    )
+    return body
+
+
+def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch):
+    client = FakeStrapi()
+    client.topic["attributes"].update({"slug": "esim-plans", "category": "gear", "primaryKeyword": "eSIM travel"})
+    cfg = make_cfg()
+    cfg = Config(
+        strapi_url=cfg.strapi_url, strapi_engine_token=cfg.strapi_engine_token,
+        openrouter_api_key=cfg.openrouter_api_key,
+        auto_publish_enabled=True, first_n_human_review=0,
+    )
+
+    import pipeline_cli
+    from research.research import Fact, ResearchResult
+    from writer.writer import ArticleDraft
+    from editor.editor import EditedDraft
+    from seo.analyze import SEOReport
+
+    monkeypatch.setattr(
+        pipeline_cli, "research_topic",
+        lambda topic, kw, config=None, **k: ResearchResult(
+            topic=topic,
+            facts=[
+                Fact(claim="Airalo covers 200+ countries.", source_url="https://airalo.com"),
+                Fact(claim="Roaming costs $50+ per trip.", source_url="https://example.com/r"),
+                Fact(claim="eSIM cuts roaming cost by 80%.", source_url="https://example.com/e"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(pipeline_cli, "validate_research", lambda r, min_facts=3: (True, [], []))
+    body = _make_high_conf_draft()
+    monkeypatch.setattr(
+        pipeline_cli, "draft_article",
+        lambda *a, **k: ArticleDraft(markdown=body, word_count=len(body.split()),
+                                     used_facts=["Airalo covers 200+ countries."]),
+    )
+    monkeypatch.setattr(
+        pipeline_cli, "edit_draft",
+        lambda draft, topic, kw, research, config=None, **k: EditedDraft(
+            markdown=draft.markdown, word_count=draft.word_count,
+            used_facts=list(draft.used_facts), edit_report="pass",
+        ),
+    )
+    # Stub the deterministic scorer so we isolate the publish branch.
+    monkeypatch.setattr(
+        pipeline_cli, "analyze_seo",
+        lambda draft, pk, secondary_keywords=None, research=None: SEOReport(
+            seo_score=85, confidence=90, meta_title="X", meta_description="Y", excerpt="Z",
+        ),
+    )
+
+    result = draft_one(client, cfg, "esim-plans")
+
+    assert result["published"] is True
+    article_statuses = [s[1].get("status") for s in client.published]
+    assert "published" in article_statuses
+    # topic marked published
+    assert client.topic_updates[-1][1].get("status") == "published"
+
+
+def test_draft_one_never_autopublishes_when_flag_off(monkeypatch):
+    client = FakeStrapi()
+    client.topic["attributes"].update({"slug": "esim-plans", "category": "gear", "primaryKeyword": "eSIM travel"})
+    cfg = make_cfg()  # auto_publish_enabled defaults False
+
+    import pipeline_cli
+    from research.research import Fact, ResearchResult
+    from writer.writer import ArticleDraft
+    from editor.editor import EditedDraft
+    from seo.analyze import SEOReport
+
+    monkeypatch.setattr(
+        pipeline_cli, "research_topic",
+        lambda topic, kw, config=None, **k: ResearchResult(
+            topic=topic,
+            facts=[
+                Fact(claim="Airalo covers 200+ countries.", source_url="https://airalo.com"),
+                Fact(claim="Roaming costs $50+ per trip.", source_url="https://example.com/r"),
+                Fact(claim="eSIM cuts roaming cost by 80%.", source_url="https://example.com/e"),
+            ],
+        ),
+    )
+    monkeypatch.setattr(pipeline_cli, "validate_research", lambda r, min_facts=3: (True, [], []))
+    body = _make_high_conf_draft()
+    monkeypatch.setattr(
+        pipeline_cli, "draft_article",
+        lambda *a, **k: ArticleDraft(markdown=body, word_count=len(body.split()),
+                                     used_facts=["Airalo covers 200+ countries."]),
+    )
+    monkeypatch.setattr(
+        pipeline_cli, "edit_draft",
+        lambda draft, topic, kw, research, config=None, **k: EditedDraft(
+            markdown=draft.markdown, word_count=draft.word_count,
+            used_facts=list(draft.used_facts), edit_report="pass",
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline_cli, "analyze_seo",
+        lambda draft, pk, secondary_keywords=None, research=None: SEOReport(
+            seo_score=85, confidence=90, meta_title="X", meta_description="Y", excerpt="Z",
+        ),
+    )
+
+    result = draft_one(client, cfg, "esim-plans")
+
+    assert result["published"] is False
+    article_statuses = [s[1].get("status") for s in client.published]
+    assert "published" not in article_statuses
+    assert article_statuses[-1] == "in_review"
