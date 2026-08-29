@@ -63,7 +63,7 @@ const WISE: Offer = {
   name: "Wise",
   tagline: "Mid-market rate, transparent fees",
   rating: 4.8,
-  href: "https://wise.com",
+  href: "https://wise.com/invite/dic/guyo75",
   ctaLabel: "Open a Wise account",
   badge: "Our #1 pick",
 };
@@ -72,7 +72,7 @@ const REVOLUT: Offer = {
   name: "Revolut",
   tagline: "All-in-one finance super-app",
   rating: 4.5,
-  href: "https://www.revolut.com",
+  href: "https://revolut.com/referral/?referral-code=guy8777q!FEB1-25-AR-US-REFBLOCK",
   ctaLabel: "Try Revolut",
 };
 
@@ -194,15 +194,33 @@ export function commercialForSlug(slug: string): ArticleCommercial | undefined {
   return COMMERCIAL_BY_SLUG[slug];
 }
 
-/** A sensible default sticky offer per category for articles without a bespoke config. */
+/**
+ * A CTA href is "monetized" if it is NOT a bare homepage. Bare homepages
+ * (e.g. `https://wise.com`, `https://nordvpn.com`) send readers traffic with
+ * no tracking — those CTAs are suppressed until a real affiliate/referral link
+ * exists. Anything with a path or query string counts as a tracked link.
+ */
+export function isMonetized(href: string): boolean {
+  if (!href) return false;
+  try {
+    const url = new URL(href);
+    const bare = (url.pathname === "" || url.pathname === "/") && url.search === "" && url.hash === "";
+    return !bare;
+  } catch {
+    return false;
+  }
+}
+
+/** A sensible default sticky offer per category for articles without a bespoke
+ *  config — only when a monetized link exists (no free-traffic CTAs). */
 export function defaultOfferForCategory(categorySlug: string): Offer | undefined {
   switch (categorySlug) {
     case "banking":
-      return WISE;
+      return isMonetized(WISE.href) ? WISE : undefined;
     case "gear":
-      return NORDVPN;
+      return isMonetized(NORDVPN.href) ? NORDVPN : undefined;
     case "taxes":
-      return SAFETYWING;
+      return isMonetized(SAFETYWING.href) ? SAFETYWING : undefined;
     default:
       return undefined;
   }

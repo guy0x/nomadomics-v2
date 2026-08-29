@@ -1,4 +1,5 @@
 import type { ComparisonTable as Table } from "@/lib/offers";
+import { isMonetized } from "@/lib/offers";
 import { Check, X, ArrowRight } from "./Icons";
 
 function Cell({ value }: { value: string | boolean }) {
@@ -9,6 +10,9 @@ function Cell({ value }: { value: string | boolean }) {
 
 /** Responsive side-by-side comparison table with per-column affiliate CTAs. */
 export default function ComparisonTable({ table }: { table: Table }) {
+  // Guard: only render the table if every column's offer link is monetized —
+  // otherwise we'd be sending free traffic to non-partner brands.
+  if (!table.columns.every((col) => isMonetized(col.offer.href))) return null;
   return (
     <section aria-label={table.heading} className="my-10">
       <h2 className="mb-4 font-display text-2xl font-bold text-ink-950">{table.heading}</h2>

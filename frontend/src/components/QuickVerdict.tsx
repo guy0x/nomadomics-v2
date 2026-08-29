@@ -1,9 +1,12 @@
 import type { QuickVerdict as Verdict } from "@/lib/offers";
+import { isMonetized } from "@/lib/offers";
 import { Star, Check, ArrowRight, Award } from "./Icons";
 
 /** MoneyMade-style above-the-fold verdict box with score + primary CTA. */
 export default function QuickVerdict({ verdict }: { verdict: Verdict }) {
   const { offer } = verdict;
+  // Guard: no CTA unless the offer link is actually monetized (no free traffic).
+  if (!isMonetized(offer.href)) return null;
   return (
     <aside
       aria-label="Quick verdict"

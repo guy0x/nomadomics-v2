@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Offer } from "@/lib/offers";
+import { isMonetized } from "@/lib/offers";
 import { ArrowRight, Star, X } from "./Icons";
 
 /**
@@ -20,6 +21,9 @@ export default function StickyOfferBar({ offer }: { offer: Offer }) {
   }, []);
 
   if (dismissed) return null;
+
+  // Guard: no sticky CTA unless the offer link is monetized (no free traffic).
+  if (!isMonetized(offer.href)) return null;
 
   return (
     <div

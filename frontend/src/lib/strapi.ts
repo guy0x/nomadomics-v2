@@ -37,26 +37,38 @@ interface StrapiListResponse<T> {
   };
 }
 
-async function strapiFetch<T>(path: string, revalidate = REVALIDATE): Promise<T> {
-  const res = await fetch(`${STRAPI_URL}${path}`, {
-    headers: {
-      Authorization: `Bearer ${STRAPI_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    next: { revalidate },
-  });
-  if (!res.ok) {
-    throw new Error(`Strapi ${path} -> ${res.status}`);
+/**
+ * Fail-soft fetch: returns null when Strapi is unreachable or errors out
+ * (e.g. during CI/Vercel builds where no CMS is reachable). Callers treat
+ * null as "no content yet" and render empty state — the build must never die
+ * because the CMS is offline. ISR will pick content up on the next revalidate.
+ */
+async function strapiFetch<T>(path: string, revalidate = REVALIDATE): Promise<T | null> {
+  try {
+    const res = await fetch(`${STRAPI_URL}${path}`, {
+      headers: {
+        ...(STRAPI_TOKEN ? { Authorization: `Bearer ${STRAPI_TOKEN}` } : {}),
+        "Content-Type": "application/json",
+      },
+      next: { revalidate },
+    });
+    if (!res.ok) {
+      console.warn(`[strapi] ${path} -> ${res.status}; rendering empty state`);
+      return null;
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    console.warn(`[strapi] ${path} unreachable (${String(err)}); rendering empty state`);
+    return null;
   }
-  return res.json() as Promise<T>;
 }
 
-/** All published articles, newest first. */
+/** All published articles, newest first. Empty when Strapi is unreachable. */
 export async function getPublishedArticles(): Promise<StrapiArticle[]> {
   const json = await strapiFetch<StrapiListResponse<StrapiArticle>>(
     `/api/articles?filters[status][$eq]=published&sort=publishedAt:desc&pagination[pageSize]=100`
   );
-  return json.data;
+  return json?.data ?? [];
 }
 
 /** A single published article by slug, or null. */
@@ -66,7 +78,7 @@ export async function getArticleBySlug(slug: string): Promise<StrapiArticle | nu
       slug
     )}&filters[status][$eq]=published&pagination[pageSize]=1`
   );
-  return json.data[0] ?? null;
+  return json?.data[0] ?? null;
 }
 
 /** Slugs of all published articles (for generateStaticParams). */

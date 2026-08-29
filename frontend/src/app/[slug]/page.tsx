@@ -8,7 +8,7 @@ import {
   readingTimeMinutes,
 } from "@/lib/strapi";
 import { categoryForSlug } from "@/lib/categories";
-import { commercialForSlug, defaultOfferForCategory } from "@/lib/offers";
+import { commercialForSlug, defaultOfferForCategory, isMonetized } from "@/lib/offers";
 import { renderBody } from "@/components/renderBody";
 import QuickVerdict from "@/components/QuickVerdict";
 import ComparisonTable from "@/components/ComparisonTable";
@@ -80,7 +80,7 @@ export default async function ArticlePage({
   const category = categoryForSlug(article.slug);
   const commercial = commercialForSlug(article.slug);
   const stickyOffer = commercial?.stickyOffer ?? defaultOfferForCategory(category.slug);
-  const { html, toc } = renderBody(article.bodyMarkdown);
+  const { content, toc } = renderBody(article.bodyMarkdown);
   const mins = readingTimeMinutes(article.bodyMarkdown);
   const published = formatDate(article.publishedAt);
 
@@ -105,7 +105,7 @@ export default async function ArticlePage({
     mainEntityOfPage: `${SITE_URL}/${article.slug}`,
     author: { "@type": "Organization", name: "Nomadomics" },
     publisher: { "@type": "Organization", name: "Nomadomics" },
-    ...(commercial?.quickVerdict
+    ...(commercial?.quickVerdict && isMonetized(commercial.quickVerdict.offer.href)
       ? {
           review: {
             "@type": "Review",
@@ -169,7 +169,7 @@ export default async function ArticlePage({
             {commercial?.quickVerdict && <QuickVerdict verdict={commercial.quickVerdict} />}
 
             {/* Body */}
-            <div className="article-body mt-8" dangerouslySetInnerHTML={{ __html: html }} />
+            <div className="article-body mt-8">{content}</div>
 
             {commercial?.comparison && <ComparisonTable table={commercial.comparison} />}
             {(commercial?.pros || commercial?.cons) && (

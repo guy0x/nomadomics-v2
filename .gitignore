@@ -45,3 +45,4 @@ __pycache__/
 # Tunnel runtime logs (launchd)
 logs/cloudflared.err
 logs/cloudflared.log
+.vercel

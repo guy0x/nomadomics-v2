@@ -3,22 +3,22 @@
  *
  * Renders `bodyMarkdown` with full GitHub-flavored markdown (headings, bullet
  * and ordered lists, tables, blockquotes, bold/italic, links) via
- * react-markdown + remark-gfm, serialized to an HTML string for the existing
- * `dangerouslySetInnerHTML` contract.
+ * react-markdown + remark-gfm. Returns a React node (rendered directly by the
+ * page — no `react-dom/server`/`dangerouslySetInnerHTML`, which Next 16 blocks
+ * in Server Components) plus a `toc` of H2 headings for the sidebar.
  *
  * Behavior notes:
- *  - The leading `# Title` H1 is dropped — the page already renders its own
- *    H1 from `article.title`, and the house voice mandates a single H1.
- *  - H2 headings get slugified ids and feed the returned `toc` (sidebar TOC).
+ *  - The leading `# Title` H1 is dropped — the page renders its own H1 from
+ *    `article.title`, and the house voice mandates a single H1.
+ *  - H2 headings get slugified ids and feed the returned `toc`.
  *  - Links open in a new tab with `rel="noopener noreferrer"`.
  */
-import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { TocItem } from "./TableOfContents";
 
 export interface RenderedBody {
-  html: string;
+  content: React.ReactNode;
   toc: TocItem[];
 }
 
@@ -74,11 +74,11 @@ export function renderBody(bodyMarkdown: string): RenderedBody {
     ),
   };
 
-  const html = renderToStaticMarkup(
+  const content = (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
       {body}
     </ReactMarkdown>
   );
 
-  return { html, toc };
+  return { content, toc };
 }
