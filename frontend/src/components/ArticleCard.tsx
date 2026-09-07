@@ -1,29 +1,30 @@
 import Link from "next/link";
+import Image from "next/image";
 import type { StrapiArticle } from "@/lib/strapi";
 import { readingTimeMinutes } from "@/lib/strapi";
 import { categoryForSlug } from "@/lib/categories";
 import { Clock, ArrowRight } from "./Icons";
 
-const CATEGORY_GRADIENT: Record<string, string> = {
-  banking: "from-brand-500 to-brand-700",
-  taxes: "from-emerald-500 to-teal-700",
-  travel: "from-sky-500 to-indigo-600",
-  gear: "from-violet-500 to-purple-700",
-  cities: "from-amber-500 to-orange-600",
-};
-
 export default function ArticleCard({ article, priority = false }: { article: StrapiArticle; priority?: boolean }) {
   const category = categoryForSlug(article.slug);
   const mins = readingTimeMinutes(article.bodyMarkdown);
-  const gradient = CATEGORY_GRADIENT[category.slug] ?? "from-brand-500 to-brand-700";
+  const img = `/cards/${article.slug}.png`;
 
   return (
     <Link
       href={`/${article.slug}`}
       className="group flex flex-col overflow-hidden rounded-2xl border border-ink-200 bg-white transition-shadow hover:shadow-lg"
     >
-      <div className={`relative flex h-44 items-end bg-gradient-to-br ${gradient} p-4`}>
-        <span className="rounded-full bg-white/90 px-2.5 py-1 text-[0.7rem] font-bold uppercase tracking-wide text-ink-800">
+      <div className="relative aspect-[16/9] bg-brand-50">
+        <Image
+          src={img}
+          alt=""
+          fill
+          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+          className="object-cover"
+          priority={priority}
+        />
+        <span className="absolute left-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-[0.7rem] font-bold uppercase tracking-wide text-ink-800">
           {category.name}
         </span>
       </div>

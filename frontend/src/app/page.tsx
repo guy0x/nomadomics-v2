@@ -1,39 +1,44 @@
 import Link from "next/link";
+import Image from "next/image";
 import { getPublishedArticles } from "@/lib/strapi";
 import { CATEGORIES } from "@/lib/categories";
 import ArticleCard from "@/components/ArticleCard";
-import CategoryIcon from "@/components/CategoryIcon";
 import { ArrowRight, TrendingUp } from "@/components/Icons";
 
 export const revalidate = 300;
 
 export default async function HomePage() {
   const articles = await getPublishedArticles();
-  const [featured, ...rest] = articles;
+  // "Start here" = the flagship guide (pinned by publish recency of the engine's
+  // strongest draft, not an unexplained editorial opinion).
+  const startHere =
+    articles.find((a) => a.slug === "best-countries-for-remote-workers-in-2025") ?? articles[0];
+  const rest = articles.filter((a) => a.slug !== startHere?.slug);
   const latest = rest.slice(0, 9);
 
   return (
     <>
-      {/* Hero */}
-      <section className="border-b border-ink-100 bg-gradient-to-b from-brand-50 to-white">
-        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
+      {/* Hero — typography-led money-frame */}
+      <section className="border-b border-ink-100 bg-gradient-to-b from-ink-50 to-white">
+        <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
           <div className="max-w-3xl">
-            <p className="mb-4 inline-flex items-center gap-2 rounded-full border border-brand-200 bg-white px-3 py-1 text-xs font-semibold text-brand-700">
+            <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-brand-200 bg-white px-3 py-1 text-xs font-semibold text-brand-700">
               <TrendingUp className="h-3.5 w-3.5" />
-              Geoarbitrage, banking &amp; tax guides
+              Money tips for travelers — no fluff, all numbers
             </p>
-            <h1 className="font-display text-4xl font-bold leading-[1.1] tracking-tight text-ink-950 sm:text-5xl">
-              Earn in dollars.
+            <h1 className="font-display text-5xl font-extrabold leading-[1.05] tracking-tight text-ink-950 sm:text-6xl">
+              Keep more of what you earn.
               <br />
-              Live in <span className="text-brand-600">whatever currency wins.</span>
+              Live{" "}
+              <span className="text-brand-600">wherever you want.</span>
             </h1>
-            <p className="mt-5 max-w-2xl text-lg leading-8 text-ink-600">
-              Practical, no-nonsense guides to multi-currency banking, nomad
-              taxes, and the logistics of working from anywhere — so you keep
-              more of what you earn.
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-ink-600">
+              No-fluff money guides for people who work online and sleep in a
+              different timezone — banking that doesn&apos;t bleed you, taxes you
+              can actually understand, and the real cost of every border.
             </p>
 
-            <div className="mt-8 flex flex-wrap gap-2">
+            <div className="mt-9 flex flex-wrap gap-2">
               {CATEGORIES.map((c) => (
                 <Link
                   key={c.slug}
@@ -45,30 +50,55 @@ export default async function HomePage() {
               ))}
             </div>
           </div>
+
+          {/* Honest stat strip */}
+          <dl className="mt-14 grid max-w-2xl grid-cols-3 gap-6 border-t border-ink-200 pt-8">
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wider text-ink-500">Guides</dt>
+              <dd className="mt-1 font-display text-3xl font-extrabold text-ink-950">{articles.length}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wider text-ink-500">Topics</dt>
+              <dd className="mt-1 font-display text-3xl font-extrabold text-ink-950">{CATEGORIES.length}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-wider text-ink-500">Cost to read</dt>
+              <dd className="mt-1 font-display text-3xl font-extrabold text-brand-600">$0</dd>
+            </div>
+          </dl>
         </div>
       </section>
 
-      {/* Featured */}
-      {featured && (
-        <section className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
-          <div className="mb-6 flex items-center justify-between">
-            <h2 className="font-display text-2xl font-bold text-ink-950">Featured guide</h2>
+      {/* Start here — flagship guide with real cover image */}
+      {startHere && (
+        <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+          <div className="mb-6 flex items-baseline justify-between">
+            <h2 className="font-display text-2xl font-bold text-ink-950">Start here</h2>
+            <span className="text-sm text-ink-500">the guide that saves you the most</span>
           </div>
           <Link
-            href={`/${featured.slug}`}
+            href={`/${startHere.slug}`}
             className="group grid overflow-hidden rounded-2xl border border-ink-200 bg-white transition-shadow hover:shadow-lg md:grid-cols-2"
           >
-            <div className="flex min-h-56 items-end bg-gradient-to-br from-brand-500 to-brand-800 p-6">
-              <span className="rounded-full bg-white/90 px-3 py-1 text-xs font-bold uppercase tracking-wide text-ink-800">
-                Editor&apos;s pick
-              </span>
+            <div className="relative aspect-[16/9] bg-brand-50 md:aspect-auto md:min-h-[21rem]">
+              <Image
+                src={`/cards/${startHere.slug}.png`}
+                alt=""
+                fill
+                sizes="(max-width: 768px) 100vw, 50vw"
+                className="object-cover"
+                priority
+              />
             </div>
             <div className="flex flex-col justify-center p-6 sm:p-8">
+              <span className="mb-3 inline-flex w-fit rounded-full bg-brand-600 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
+                Start here
+              </span>
               <h3 className="font-display text-2xl font-bold leading-tight text-ink-950 group-hover:text-brand-700 sm:text-3xl">
-                {featured.title}
+                {startHere.title}
               </h3>
-              {featured.excerpt && (
-                <p className="mt-3 text-base leading-7 text-ink-600">{featured.excerpt}</p>
+              {startHere.excerpt && (
+                <p className="mt-3 text-base leading-7 text-ink-600">{startHere.excerpt}</p>
               )}
               <span className="mt-5 inline-flex items-center gap-2 font-semibold text-brand-700">
                 Read the guide
@@ -90,9 +120,6 @@ export default async function HomePage() {
                 href={`/category/${c.slug}`}
                 className="group flex items-start gap-4 rounded-2xl border border-ink-200 bg-white p-5 transition-shadow hover:shadow-md"
               >
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                  <CategoryIcon slug={c.slug} className="h-6 w-6" />
-                </span>
                 <span>
                   <span className="block font-display text-base font-bold text-ink-950 group-hover:text-brand-700">
                     {c.name}
@@ -106,15 +133,43 @@ export default async function HomePage() {
       </section>
 
       {/* Latest feed */}
-      <section className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
-        <div className="mb-6 flex items-center justify-between">
+      <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+        <div className="mb-6 flex items-baseline justify-between">
           <h2 className="font-display text-2xl font-bold text-ink-950">Latest articles</h2>
-          <span className="text-sm text-ink-500">{articles.length} guides</span>
+          <span className="text-sm text-ink-500">one new guide most weekdays</span>
         </div>
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {latest.map((a) => (
-            <ArticleCard key={a.documentId} article={a} />
+          {latest.map((a, i) => (
+            <ArticleCard key={a.documentId} article={a} priority={i < 3} />
           ))}
+        </div>
+      </section>
+
+      {/* Newsletter close — honest (no provider wired yet) */}
+      <section className="border-t border-ink-100 bg-brand-50">
+        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+          <div className="mx-auto max-w-2xl text-center">
+            <h2 className="font-display text-3xl font-bold text-ink-950">
+              One money tip a week.
+            </h2>
+            <p className="mt-3 text-lg leading-8 text-ink-600">
+              The kind you can use at a border crossing. No spam, no course
+              upsell — unsubscribe in one click.
+            </p>
+            <div className="mt-6 flex justify-center gap-2">
+              <Link
+                href="/about"
+                className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
+              >
+                Start with the best guides
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </div>
+            <p className="mt-3 text-xs text-ink-500">
+              Newsletter coming soon — for now, everything we publish is free on
+              the site.
+            </p>
+          </div>
         </div>
       </section>
     </>
