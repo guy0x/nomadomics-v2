@@ -41,11 +41,17 @@ Voice anchor: `engine/writer/prompts/voice_exemplar.md` (2nd person, money-first
 → 10 WP articles need focusKw + metaTitle + metaDescription (+1 missing excerpt);
 3 engine drafts complete. All 13 publishedAt = today (un-staggered). All lack images.
 
-## Image tooling (Phase 1 probe)
+## Image tooling (Phase 1 probe) — OUTCOME
 
-- CDP automation browser: UP (port 9222).
-- `gemini.google.com/images` in a browser: NOT authenticated (sign-in wall — see goal-prompt attachment).
-- **Fallback path available and verified reachable: Gemini image API via `GEMINI_API_KEY`**
-  (`generativelanguage.googleapis.com/v1beta/openai/models` → image models present:
-  `gemini-2.5-flash-image`, `gemini-3.1-flash-image`, etc.). The goal-prompt's Prepared
-  Default explicitly authorizes this fallback — it will be used, and reported as such.
+- `gemini.google.com/images` in the automation browser: **not authenticated** initially.
+  Guy signed in via a visible Brave window on the shared debug profile (9222) — session verified live.
+- Gemini image API via `GEMINI_API_KEY`: 401 on native v1beta path, 429 quota-0 on the
+  OpenAI-compat route (free tier excludes image models). Not usable.
+- **FINAL PATH (used):** Guy-authenticated gemini.google.com web app, driven via CDP —
+  13 photorealistic travel scenes (no text) generated one per article, extracted as
+  canvas→dataURL→PNG, finalized with sips center-crop-to-fill
+  (og 1200×630 → `public/og/<slug>.png`, cards 1200×675 → `public/cards/<slug>.png`).
+- Strapi media upload NOT used: engine token is update-only (403 on /api/upload, by design).
+  Images serve from the repo via slug convention — the frontend already wires
+  `/og/<slug>.png` into og:image/twitter:image and `/cards/<slug>.png` into ArticleCard.
+  Zero schema change, as the Prepared Default required.
