@@ -20,6 +20,15 @@ def make_cfg():
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_state_file(tmp_path, monkeypatch):
+    """Route _append_state to a tmp file so tests never pollute the real
+    engine/state/pipeline.jsonl audit log."""
+    import pipeline_cli
+
+    monkeypatch.setattr(pipeline_cli, "STATE_FILE", tmp_path / "pipeline.jsonl")
+
+
 class FakeStrapi:
     """Duck-typed stand-in for StrapiClient."""
 
