@@ -37,6 +37,32 @@ Run tests:
 cd ~/nomadomics-v2/engine && env -u PYTHONPATH ../.venv/bin/python -m pytest tests/ -q
 ```
 
+## Gemini content pipeline (2026-08-29)
+
+Research → draft → edit all run on **Gemini 2.5 Flash** (primary) via the
+OpenAI-compatible endpoint, with OpenRouter `:free` models as fallback chain.
+Key: `GEMINI_API_KEY` in the gitignored `.env` (never logged).
+
+- Stage map: `engine/research/` → `engine/writer/` → `engine/editor/` → `engine/seo/analyze.py`
+  (deterministic scorer incl. a **structure score**: tables/bullets/H3/pros-cons feed
+  `seo_score`, so walls of prose score lower than structured drafts).
+- Publish kill-switch: `AUTO_PUBLISH_ENABLED` in `.env` (default **false**). While false,
+  every draft lands `in_review` for Guy. When Guy flips it true, non-sensitive topics with
+  confidence ≥ 80 auto-publish; taxes/legal/medical/visas/banking always quarantine to review.
+- Structure contract lives in the writer + editor prompts (bullets under every H3,
+  comparison tables, Pros/Cons, Bottom Line, FAQ) — output renders via the frontend's
+  react-markdown GFM renderer.
+
+## Daily batch cron (STAGED — NOT ARMED)
+
+Command (when Guy approves):
+```
+cd ~/nomadomics-v2 && env -u PYTHONPATH .venv/bin/python -m engine.cli run-batch 2
+```
+Schedule: `0 9 * * 0-5` (09:00 Sun–Fri, Saturday off) → drafts land `in_review` +
+Telegram notify. **Do not create while testing:** the gateway is running, so a created
+cron fires immediately.
+
 ## Kill switch (<60s)
 
 - `launchctl unload ~/Library/LaunchAgents/com.nomadomics.strapi.plist` — halts Strapi.
