@@ -97,3 +97,14 @@ STRAPI_API_TOKEN=<read-only token>          # NOT the engine token
 NEXT_PUBLIC_SITE_URL=https://nomadomics.blog
 ```
 DNS plan: apex + www -> Vercel · strapi.* -> Cloudflare tunnel (done 2026-08-25)
+
+## Hard rule: NO years in slugs (Guy, 2026-09-07)
+
+Article slugs must never contain a year (`20\d{2}`). Titles and meta titles SHOULD
+carry the current year (SEO best practice) — slugs must not. The engine enforces
+this at article-creation time via `_yearless_slug()` (`engine/pipeline_cli.py`),
+which strips `-for-YYYY`, `-in-YYYY`, leading `YYYY-`, and bare `-YYYY` tokens.
+Tests: `engine/tests/test_yearless_slug.py`. Topic slugs in Strapi may contain
+years (the rule applies when the ARTICLE is created).
+
+Kill switch / rollback: none needed — the rule is deterministic and idempotent.

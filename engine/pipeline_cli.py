@@ -44,6 +44,24 @@ def _attrs(doc: dict) -> dict:
     return doc or {}
 
 
+def _yearless_slug(slug: str) -> str:
+    """Hard rule (Guy, 2026-09-07): NO years in slugs.
+
+    Strips years from a topic slug before it becomes the article's URL —
+    including the dangling preposition ('-for-2025', '-in-2025') and the
+    leading-year variant ('2025-europe-travel-rules'). Idempotent.
+    Verified against all live slugs; see tests/test_yearless_slug.py.
+    """
+    import re
+
+    s = slug or ""
+    s = re.sub(r"-(?:for|in|of)-20\d{2}\b", "", s)
+    s = re.sub(r"(?:^|-)20\d{2}(?:-|$)", "-", s)
+    s = re.sub(r"-?20\d{2}-?", "-", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s
+
+
 def _topic_payload(topic: dict) -> dict:
     """Extract useful fields from a Strapi topic document (flat v5 shape)."""
     a = _attrs(topic)
@@ -125,7 +143,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     article = client.create_article(
         {
             "title": topic["title"],
-            "slug": topic["slug"],
+            "slug": _yearless_slug(topic["slug"]),
             "bodyMarkdown": to_score.markdown,
             "targetKeywords": kw_val,
             "focusKeyword": primary,
