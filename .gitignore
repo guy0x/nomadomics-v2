@@ -46,3 +46,6 @@ __pycache__/
 logs/cloudflared.err
 logs/cloudflared.log
 .vercel
+
+# Engine runtime state (append-only event logs, not source)
+engine/state/
