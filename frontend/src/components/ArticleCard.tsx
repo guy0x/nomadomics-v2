@@ -3,12 +3,13 @@ import Image from "next/image";
 import type { StrapiArticle } from "@/lib/strapi";
 import { readingTimeMinutes } from "@/lib/strapi";
 import { categoryForSlug } from "@/lib/categories";
+import { cardImageFor } from "@/lib/images";
 import { Clock, ArrowRight } from "./Icons";
 
 export default function ArticleCard({ article, priority = false }: { article: StrapiArticle; priority?: boolean }) {
   const category = categoryForSlug(article.slug);
   const mins = readingTimeMinutes(article.bodyMarkdown);
-  const img = `/cards/${article.slug}.png`;
+  const img = cardImageFor(article.slug);
 
   return (
     <Link

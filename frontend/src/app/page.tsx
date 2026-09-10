@@ -3,6 +3,7 @@ import Image from "next/image";
 import { getPublishedArticles } from "@/lib/strapi";
 import { CATEGORIES } from "@/lib/categories";
 import ArticleCard from "@/components/ArticleCard";
+import { cardImageFor } from "@/lib/images";
 import { ArrowRight, TrendingUp } from "@/components/Icons";
 
 export const revalidate = 300;
@@ -12,7 +13,7 @@ export default async function HomePage() {
   // "Start here" = the flagship guide (pinned by publish recency of the engine's
   // strongest draft, not an unexplained editorial opinion).
   const startHere =
-    articles.find((a) => a.slug === "best-countries-for-remote-workers-in-2025") ?? articles[0];
+    articles.find((a) => a.slug === "best-countries-for-remote-workers") ?? articles[0];
   const rest = articles.filter((a) => a.slug !== startHere?.slug);
   const latest = rest.slice(0, 9);
 
@@ -82,7 +83,7 @@ export default async function HomePage() {
           >
             <div className="relative aspect-[16/9] bg-brand-50 md:aspect-auto md:min-h-[21rem]">
               <Image
-                src={`/cards/${startHere.slug}.png`}
+                src={cardImageFor(startHere.slug)}
                 alt=""
                 fill
                 sizes="(max-width: 768px) 100vw, 50vw"
