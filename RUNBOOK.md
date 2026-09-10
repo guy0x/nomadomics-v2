@@ -18,6 +18,10 @@ auto-restarts if it crashes. No need to manually `npm run dev` anymore.
 Config: `~/Library/LaunchAgents/com.nomadomics.strapi.plist`
 Logs: `~/nomadomics-v2/logs/strapi-{service.log,service.err}`
 
+## Content API tokens (rotated 2026-09-10)
+
+Token plaintexts live only in `.env` (engine) and `frontend/.env.local` (frontend) — never in git. The frontend uses a dedicated **read-only** token (`frontend-read`); the engine uses `engine-write`. To rotate a token without the admin UI: generate `secrets.token_hex(64)` in Python, store `HMAC-SHA512(key=API_TOKEN_SALT, msg=<plaintext>)` as hex in `strapi_api_tokens.access_key` (`encrypted_key` may be NULL — it is unused because `ADMIN_ENCRYPTION_KEY` is not set), update the matching `.env` file, restart Strapi if its own env changed. The old `.env.strapi`-era credentials (DB password, salts, JWT secrets, original API tokens) were exposed in git history before commit `5a9eb13` and were fully rotated on 2026-09-10; Vercel's `STRAPI_API_TOKEN` (Production) was swapped and redeployed the same day.
+
 ## Mission Control dashboard security
 
 Mission Control binds to `127.0.0.1:8080` by default and does not enable CORS. Read-only GET endpoints remain available locally; mutating POST endpoints require `DASHBOARD_ADMIN_TOKEN` via `Authorization: Bearer <token>` or `X-Dashboard-Token`. Set `DASHBOARD_HOST` only when a deliberately secured reverse proxy/container requires another bind address. Never expose the dashboard directly to the public internet.
