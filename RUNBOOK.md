@@ -18,6 +18,10 @@ auto-restarts if it crashes. No need to manually `npm run dev` anymore.
 Config: `~/Library/LaunchAgents/com.nomadomics.strapi.plist`
 Logs: `~/nomadomics-v2/logs/strapi-{service.log,service.err}`
 
+## Mission Control dashboard security
+
+Mission Control binds to `127.0.0.1:8080` by default and does not enable CORS. Read-only GET endpoints remain available locally; mutating POST endpoints require `DASHBOARD_ADMIN_TOKEN` via `Authorization: Bearer <token>` or `X-Dashboard-Token`. Set `DASHBOARD_HOST` only when a deliberately secured reverse proxy/container requires another bind address. Never expose the dashboard directly to the public internet.
+
 ## Content engine CLI
 
 Engine venv: `~/nomadomics-v2/.venv` (Python 3.11). All commands from

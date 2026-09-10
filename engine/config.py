@@ -71,8 +71,12 @@ class Config:
     first_n_human_review: int = 0  # Guy 2026-08-29: no first-N hold — auto-publish from day one at >=80
     # v1 rule: automation NEVER publishes unless Guy flips AUTO_PUBLISH_ENABLED=true.
     auto_publish_enabled: bool = False
+    # Bearer token guarding the dashboard's mutating endpoints (run-batch, topics/add).
+    # Empty disables those endpoints entirely (fail-closed). Never logged.
+    dashboard_admin_token: str = ""
     _secret_fields: tuple = field(
-        default=("strapi_engine_token", "openrouter_api_key", "gemini_api_key"), repr=False
+        default=("strapi_engine_token", "openrouter_api_key", "gemini_api_key", "dashboard_admin_token"),
+        repr=False,
     )
 
     def is_free_model(self, model: str | None = None) -> bool:
@@ -98,6 +102,7 @@ def load_config(*, env_path: Path = ENV_PATH) -> Config:
         gemini_api_key=env.get("GEMINI_API_KEY", ""),
         premium_enabled=premium,
         auto_publish_enabled=auto_publish,
+        dashboard_admin_token=env.get("DASHBOARD_ADMIN_TOKEN", ""),
     )
 
 

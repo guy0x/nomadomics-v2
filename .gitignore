@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-package-lock.json
+# Lockfiles are tracked for reproducible installs.
 
 # Strapi runtime + build artefacts
 .strapi/

@@ -11,6 +11,7 @@ Serves an all-in-one web dashboard for Nomadomics 2.0:
 from __future__ import annotations
 
 import http.server
+import hmac
 import json
 import os
 import subprocess
@@ -29,9 +30,43 @@ from strapi import StrapiClient, StrapiError
 STATE_FILE = ENGINE_DIR / "state" / "pipeline.jsonl"
 HTML_FILE = ENGINE_DIR / "dashboard.html"
 
+# The dashboard exposes a token-guarded mutation surface. Default bind is
+# loopback-only; set DASHBOARD_HOST=0.0.0.0 only when a reverse proxy or a
+# container needs to reach it, and always with DASHBOARD_ADMIN_TOKEN set.
+DEFAULT_BIND_HOST = "127.0.0.1"
+
 # Global lock for background engine runs
 _RUN_LOCK = threading.Lock()
 _CURRENT_RUN = {"status": "idle", "topic": None, "started_at": None, "last_result": None}
+
+
+def _get_admin_token() -> str:
+    """Resolve the dashboard admin token (process env first, then project .env).
+
+    Returns "" when unset — callers must treat that as fail-closed.
+    """
+    token = os.environ.get("DASHBOARD_ADMIN_TOKEN")
+    if token:
+        return token
+    try:
+        return load_config().dashboard_admin_token
+    except Exception:
+        return ""
+
+
+def _extract_bearer(self) -> str:
+    auth = self.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[len("Bearer "):]
+    return self.headers.get("X-Dashboard-Token", "")
+
+
+def _authorized(self) -> bool:
+    token = _get_admin_token()
+    if not token:
+        return False
+    supplied = _extract_bearer(self)
+    return hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
 
 
 def _get_pipeline_logs(limit: int = 25) -> list[dict]:
@@ -86,17 +121,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def _send_json(self, data: dict | list, status: int = 200):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
     def do_GET(self):
@@ -163,6 +192,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
 
+        if not _authorized(self):
+            self._send_json({"error": "Unauthorized"}, status=401)
+            return
+
         if path == "/api/run-batch":
             count = int(body.get("count", 1))
             if _RUN_LOCK.locked():
@@ -208,9 +241,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         self._send_json({"error": "Not Found"}, status=404)
 
 
-def run_server(port: int = 8080):
-    server = http.server.HTTPServer(("0.0.0.0", port), DashboardHandler)
-    print(f"🚀 Nomadomics Mission Control running at http://localhost:{port}")
+def run_server(port: int = 8080, host: str = DEFAULT_BIND_HOST):
+    server = http.server.HTTPServer((host, port), DashboardHandler)
+    bind_desc = "localhost" if host in ("127.0.0.1", "localhost") else host
+    print(f"🚀 Nomadomics Mission Control running at http://{bind_desc}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -221,4 +255,5 @@ def run_server(port: int = 8080):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-    run_server(port)
+    host = os.environ.get("DASHBOARD_HOST", DEFAULT_BIND_HOST)
+    run_server(port, host)
