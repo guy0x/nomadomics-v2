@@ -38,6 +38,8 @@ CAKE_BASE = "https://cake.nano-gpt.com/api/v1"
 CAKE_MODEL = "hidream"
 CAKE_SIZE = "1536x1024"
 CAKE_KEY_ENV = "HERMES_CUSTOM_CAKE_NANO_GPT_COM_API_KEY"
+# Last-resort polish model (paid but pennies) — used when the free chain fails.
+CAKE_CHAT_MODEL = "z-ai/glm-5.3-flash"
 
 POLISH_SYSTEM = """You are the Nomadomics final-publish editor. The article passed
 research + draft + edit stages and is structurally sound, well-voiced, and
@@ -232,6 +234,31 @@ def polish_article(
             except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, KeyError) as e:
                 print(f"  ! polish attempt failed ({provider}/{model_id}): {e}", file=sys.stderr)
                 continue
+
+        # Free chain exhausted — Cake Nano chat fallback (same key as cover art).
+        key = os.environ.get(CAKE_KEY_ENV, "")
+        if key:
+            try:
+                resp = client.post(
+                    f"{CAKE_BASE}/chat/completions",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={
+                        "model": CAKE_CHAT_MODEL,
+                        "messages": payload["messages"],
+                        "temperature": 0.3,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+                result = _parse_polish(content, article)
+                if result is not None:
+                    print(f"  polish ok via cake-nano fallback ({CAKE_CHAT_MODEL})")
+                    return result
+            except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, KeyError) as e:
+                print(f"  ! cake-nano polish fallback failed: {e}", file=sys.stderr)
+        else:
+            print("  ! cake-nano polish fallback unavailable (no key)", file=sys.stderr)
     finally:
         client.close()
     return None
