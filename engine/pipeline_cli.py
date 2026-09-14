@@ -24,6 +24,7 @@ from research.research import research_topic, validate_research
 from seo.analyze import analyze_seo
 from writer.writer import draft_article
 from policy.publish import Decision, apply_policy, is_sensitive
+from publish import publish_one as _publish_one_runner
 from strapi import StrapiClient, StrapiError
 
 STATE_FILE = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
@@ -260,6 +261,20 @@ def main(argv: list[str] | None = None) -> int:
             for d in drafts:
                 a = _attrs(d)
                 print(f'  - [{a.get("status")}] {a.get("title")} (conf={a.get("confidence")})')
+            return 0
+
+        # publish one article (daily pipeline)
+        if cmd == "publish":
+            dry_run = "--dry-run" in argv
+            skip_image = "--skip-image" in argv
+            no_commit = "--no-commit" in argv
+            result = _publish_one_runner(
+                client, cfg,
+                dry_run=dry_run,
+                skip_image=skip_image,
+                no_commit=no_commit,
+            )
+            print(json.dumps(result, indent=2))
             return 0
 
         # config/info

@@ -30,6 +30,14 @@
       "type": "text",
       "required": true
     },
+    "coverImage": {
+      "type": "media",
+      "multiple": false,
+      "required": false,
+      "allowedTypes": [
+        "images"
+      ]
+    },
     "targetKeywords": {
       "type": "string"
     },
