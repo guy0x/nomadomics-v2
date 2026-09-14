@@ -136,8 +136,19 @@ Public URL never changes; Vercel env untouched.
 STRAPI_URL=https://strapi.nomadomics.blog   # server-side data fetch
 STRAPI_API_TOKEN=<read-only token>          # NOT the engine token
 NEXT_PUBLIC_SITE_URL=https://nomadomics.blog
+NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION=       # GSC HTML tag token (empty locally, set on Vercel production)
 ```
 DNS plan: apex + www -> Vercel · strapi.* -> Cloudflare tunnel (done 2026-08-25)
+
+### Google Search Console verification (Guy-side, 2 min)
+
+1. Open https://search.google.com/search-console and sign in with your Google account.
+2. Click **Add property** → choose **URL prefix** → enter `https://nomadomics.blog`.
+3. When prompted for verification method, choose **HTML tag**. Copy the `content` value of the meta tag (a long alphanumeric token).
+4. In Vercel: Project → Settings → Environment Variables → add `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION=<your token>`.
+5. Redeploy to production (or let the next deploy pick up the new env var).
+6. Back in GSC, click **Verify**. Once verified, submit `https://nomadomics.blog/sitemap.xml` under **Sitemaps**.
+7. The `verification: { google: ... }` meta tag is already wired in `src/app/layout.tsx` — no code change needed.
 
 ## Hard rule: NO years in slugs (Guy, 2026-09-07)
 
