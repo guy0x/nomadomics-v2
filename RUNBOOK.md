@@ -94,6 +94,10 @@ One polished article/day auto-publishes with cover art.
 - Cover integrity: `node frontend/scripts/check-images.mjs` (snapshot:
   `frontend/scripts/published-slugs.json` — the runner does NOT update it;
   refresh it when publishing outside the runner).
+- ISR note: the runner's single publish update (body + meta together)
+  triggers frontend revalidation. POST-publish meta-only edits via Strapi do
+  NOT revalidate the page — flush with an empty-commit redeploy if you ever
+  hot-fix meta after publish.
 - Kill switch: `hermes --profile default cron pause b9e3891806f7` (resume with
   `cron resume`). Quarantine a bad article: set `status` back via Strapi admin.
 - Audit copy (paused, disabled): job `426cd86169bc` in the hephaestus-profile
