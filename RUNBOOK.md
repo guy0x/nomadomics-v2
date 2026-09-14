@@ -71,6 +71,35 @@ Schedule: `0 9 * * 0-5` (09:00 Sun–Fri, Saturday off) → drafts land `in_revi
 Telegram notify. **Do not create while testing:** the gateway is running, so a created
 cron fires immediately.
 
+## Daily publish pipeline (ARMED 2026-09-14 — Guy sign-off)
+
+One polished article/day auto-publishes with cover art.
+
+- Cron job `b9e3891806f7` "nomadomics-daily-publish" in the **default profile**
+  cron store (`~/.hermes/cron/jobs.json`), `no_agent`, deliver `telegram`.
+- Schedule `0 13 * * *` local = **10:00 UTC daily** (Guy-approved 2026-09-14),
+  one hour after the 09:00 draft batch.
+- Entrypoint: `~/.hermes/scripts/nomadomics_daily_publish.sh` (repo-external;
+  strips global PYTHONPATH, runs `engine.cli publish`, pushes the cover-art
+  commit, formats the Telegram notice).
+- Runner: `engine/publish.py` via `engine.cli publish` (`--dry-run`,
+  `--skip-image`, `--no-commit`). Picks highest-confidence `in_review` article
+  ≥ 75 → LLM polish (TL;DR, 2–3 internal links, meta caps; Gemini→:free chain,
+  Cake Nano `z-ai/glm-5.3-flash` fallback) → Strapi `publishedAt=now` → Cake
+  Nano HiDream 1200×630 cover → `frontend/public/{cards,og}/<slug>.png` →
+  git commit + push → live URL verification.
+- Idempotency/state: `engine/state/publish-pipeline.jsonl` (gitignored, like
+  all of `engine/state/`) — max 1 publish per UTC day, never re-publishes a
+  slug. No eligible article ⇒ skip notice, no publish.
+- Cover integrity: `node frontend/scripts/check-images.mjs` (snapshot:
+  `frontend/scripts/published-slugs.json` — the runner does NOT update it;
+  refresh it when publishing outside the runner).
+- Kill switch: `hermes --profile default cron pause b9e3891806f7` (resume with
+  `cron resume`). Quarantine a bad article: set `status` back via Strapi admin.
+- Audit copy (paused, disabled): job `426cd86169bc` in the hephaestus-profile
+  cron store — the hephaestus gateway cannot fire (telegram token conflict
+  with the default gateway); the default-profile job is the live one.
+
 ## Kill switch (<60s)
 
 - `launchctl unload ~/Library/LaunchAgents/com.nomadomics.strapi.plist` — halts Strapi.
