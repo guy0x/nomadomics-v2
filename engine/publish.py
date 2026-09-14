@@ -62,6 +62,9 @@ Return STRICT JSON only, no markdown fences:
 {"markdown": "<full article>", "metaTitle": "...", "metaDescription": "..."}
 """
 
+def _current_year() -> str:
+    return _today_utc()[:4]
+
 
 # ----------------------------------------------------------------------------
 # State
@@ -157,15 +160,19 @@ def pick_link_targets(published: list[dict], *, n: int = 8) -> list[dict]:
 
 def _build_polish_prompt(article: dict, primary_kw: str, related: list[dict]) -> str:
     rel_lines = "\n".join(f"- [{r['slug']}](/{r['slug']}): {r['title']}" for r in related)
+    year = _current_year()
     return (
         f"TITLE: {article.get('title')}\n"
         f"PRIMARY KEYWORD: {primary_kw}\n"
+        f"CURRENT YEAR: {year} — if a year appears in metaTitle or "
+        f"metaDescription it MUST be {year}, never a previous year.\n"
         f"EXCERPT: {article.get('excerpt') or ''}\n\n"
         "=== RELATED ARTICLES (link to 2-3 of these) ===\n"
         f"{rel_lines}\n\n"
         "=== ARTICLE BODY (markdown) ===\n"
         f"{article.get('bodyMarkdown')}\n\n"
-        "Polish now per the rules and return strict JSON."
+        f"Polish now per the rules and return strict JSON. "
+        f"Remember: the only acceptable year is {year}."
     )
 
 
@@ -440,6 +447,11 @@ def publish_one(
         new_meta_title = new_meta_title[:57].rstrip() + "..."
     if len(new_meta_desc) > 160:
         new_meta_desc = new_meta_desc[:157].rstrip() + "..."
+    # Deterministic guard: a polish model can stamp a stale year into meta
+    # fields (2026-09-14: "…2025" produced in 2026). Force the current year.
+    cur_year = _current_year()
+    new_meta_title = re.sub(r"\b20\d{2}\b", cur_year, new_meta_title)
+    new_meta_desc = re.sub(r"\b20\d{2}\b", cur_year, new_meta_desc)
 
     # --- publish to Strapi ---
     if not dry_run:

@@ -38,6 +38,17 @@ client.update_article(a["documentId"], {
     "metaTitle": meta_title,
     "metaDescription": meta_desc,
 })
+
+# Year hygiene guard (same as publish_one): force current year in meta fields.
+import re as _re
+CUR = "2026"
+meta_title = _re.sub(r"\b20\d{2}\b", CUR, meta_title)
+meta_desc = _re.sub(r"\b20\d{2}\b", CUR, meta_desc)
+client.update_article(a["documentId"], {
+    "metaTitle": meta_title,
+    "metaDescription": meta_desc,
+})
+print("year-guard pass applied")
 print("re-polished OK")
 print("  TL;DR present:", "## TL;DR" in md)
 print("  metaTitle len:", len(meta_title))
