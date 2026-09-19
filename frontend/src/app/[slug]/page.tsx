@@ -18,7 +18,8 @@ import TableOfContents from "@/components/TableOfContents";
 import ReadingProgress from "@/components/ReadingProgress";
 import AdvertiserDisclosure from "@/components/AdvertiserDisclosure";
 import ArticleCard from "@/components/ArticleCard";
-import { ogImageFor } from "@/lib/images";
+import { ogImageFor, cardImageFor } from "@/lib/images";
+import Image from "next/image";
 import { Clock, ChevronRight } from "@/components/Icons";
 
 export const revalidate = 300;
@@ -172,6 +173,21 @@ export default async function ArticlePage({
                 <AdvertiserDisclosure />
               </div>
             </header>
+
+            {/* Hero: the article's own cover art. It was generated for every
+                article but only ever shown as og:image and on homepage cards,
+                so long articles opened on a wall of text. */}
+            <figure className="mt-8 overflow-hidden rounded-2xl border border-ink-200 bg-brand-50">
+              <Image
+                src={cardImageFor(article.slug)}
+                alt={article.title}
+                width={1200}
+                height={630}
+                priority
+                sizes="(max-width: 768px) 100vw, 768px"
+                className="h-auto w-full"
+              />
+            </figure>
 
             {commercial?.quickVerdict && <QuickVerdict verdict={commercial.quickVerdict} />}
 

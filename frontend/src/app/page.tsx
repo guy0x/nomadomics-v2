@@ -84,7 +84,7 @@ export default async function HomePage() {
             <div className="relative aspect-[16/9] bg-brand-50 md:aspect-auto md:min-h-[21rem]">
               <Image
                 src={cardImageFor(startHere.slug)}
-                alt=""
+                alt={startHere.title}
                 fill
                 sizes="(max-width: 768px) 100vw, 50vw"
                 className="object-cover"

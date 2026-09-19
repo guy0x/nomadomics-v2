@@ -19,7 +19,7 @@ export default function ArticleCard({ article, priority = false }: { article: St
       <div className="relative aspect-[16/9] bg-brand-50">
         <Image
           src={img}
-          alt=""
+          alt={article.title}
           fill
           sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
           className="object-cover"
