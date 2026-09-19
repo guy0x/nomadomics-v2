@@ -11,6 +11,16 @@ const STRAPI_TOKEN = process.env.STRAPI_API_TOKEN ?? "";
 /** Seconds between ISR revalidations. */
 export const REVALIDATE = 300;
 
+export interface StrapiAuthor {
+  id: number;
+  documentId: string;
+  name: string;
+  slug: string;
+  role: string | null;
+  bio: string | null;
+  credentials: string | null;
+}
+
 export interface StrapiArticle {
   id: number;
   documentId: string;
@@ -28,6 +38,8 @@ export interface StrapiArticle {
   publishedAt: string | null;
   updatedAt: string;
   createdAt: string;
+  /** Byline. Null on articles created before the author content type existed. */
+  author?: StrapiAuthor | null;
 }
 
 interface StrapiListResponse<T> {
@@ -63,10 +75,10 @@ async function strapiFetch<T>(path: string, revalidate = REVALIDATE): Promise<T 
   }
 }
 
-/** All published articles, newest first. Empty when Strapi is unreachable. */
+/** All published articles, newest first, with their byline. Empty when Strapi is unreachable. */
 export async function getPublishedArticles(): Promise<StrapiArticle[]> {
   const json = await strapiFetch<StrapiListResponse<StrapiArticle>>(
-    `/api/articles?filters[status][$eq]=published&sort=publishedAt:desc&pagination[pageSize]=100`
+    `/api/articles?filters[status][$eq]=published&sort=publishedAt:desc&pagination[pageSize]=100&populate=author`
   );
   return json?.data ?? [];
 }
@@ -76,9 +88,35 @@ export async function getArticleBySlug(slug: string): Promise<StrapiArticle | nu
   const json = await strapiFetch<StrapiListResponse<StrapiArticle>>(
     `/api/articles?filters[slug][$eq]=${encodeURIComponent(
       slug
-    )}&filters[status][$eq]=published&pagination[pageSize]=1`
+    )}&filters[status][$eq]=published&pagination[pageSize]=1&populate=author`
   );
   return json?.data[0] ?? null;
+}
+
+/** Every author, alphabetical — for the About page's team section. */
+export async function getAuthors(): Promise<StrapiAuthor[]> {
+  const json = await strapiFetch<StrapiListResponse<StrapiAuthor>>(
+    `/api/authors?sort=name:asc&pagination[pageSize]=100`
+  );
+  return json?.data ?? [];
+}
+
+/** A single author by slug, or null. */
+export async function getAuthorBySlug(slug: string): Promise<StrapiAuthor | null> {
+  const json = await strapiFetch<StrapiListResponse<StrapiAuthor>>(
+    `/api/authors?filters[slug][$eq]=${encodeURIComponent(slug)}&pagination[pageSize]=1`
+  );
+  return json?.data[0] ?? null;
+}
+
+/** An author's published articles, newest first. */
+export async function getArticlesByAuthor(documentId: string): Promise<StrapiArticle[]> {
+  const json = await strapiFetch<StrapiListResponse<StrapiArticle>>(
+    `/api/articles?filters[author][documentId][$eq]=${encodeURIComponent(
+      documentId
+    )}&filters[status][$eq]=published&sort=publishedAt:desc&pagination[pageSize]=100&populate=author`
+  );
+  return json?.data ?? [];
 }
 
 /** Slugs of all published articles (for generateStaticParams). */

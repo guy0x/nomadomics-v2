@@ -111,7 +111,14 @@ export default async function ArticlePage({
     datePublished: article.publishedAt ?? undefined,
     dateModified: article.updatedAt,
     mainEntityOfPage: `${SITE_URL}/${article.slug}`,
-    author: { "@type": "Organization", name: "Nomadomics" },
+    author: article.author
+      ? {
+          "@type": "Person",
+          name: article.author.name,
+          url: `${SITE_URL}/author/${article.author.slug}`,
+          ...(article.author.role ? { jobTitle: article.author.role } : {}),
+        }
+      : { "@type": "Organization", name: "Nomadomics" },
     publisher: { "@type": "Organization", name: "Nomadomics" },
     ...(commercial?.quickVerdict && isMonetized(commercial.quickVerdict.offer.href)
       ? {
@@ -165,6 +172,19 @@ export default async function ArticlePage({
                 <p className="mt-4 text-lg leading-8 text-ink-600">{article.excerpt}</p>
               )}
               <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink-500">
+                {article.author && (
+                  <span>
+                    By{" "}
+                    <Link
+                      href={`/author/${article.author.slug}`}
+                      rel="author"
+                      className="font-medium text-ink-700 hover:text-brand-700"
+                    >
+                      {article.author.name}
+                    </Link>
+                    {article.author.role ? <>, {article.author.role}</> : null}
+                  </span>
+                )}
                 <span className="flex items-center gap-1.5">
                   <Clock className="h-4 w-4" />
                   {mins} min read
