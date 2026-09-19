@@ -129,6 +129,35 @@ class StrapiClient:
         )
         return int((data.get("meta") or {}).get("pagination", {}).get("total", 0))
 
+    # ---- Authors --------------------------------------------------------
+    def list_authors(self) -> list[dict]:
+        """Authors with their article counts, for even byline distribution.
+
+        `populate[articles][fields][0]=slug` keeps the payload small (one slug per
+        article) while still giving an exact count per author.
+        """
+        data = self._request(
+            "GET",
+            "/api/authors",
+            params={
+                "fields[0]": "name",
+                "fields[1]": "slug",
+                "populate[articles][fields][0]": "slug",
+                "pagination[pageSize]": 100,
+                "sort": "slug:asc",
+            },
+        )
+        rows = data.get("data", [])
+        return [
+            {
+                "documentId": r.get("documentId"),
+                "name": r.get("name"),
+                "slug": r.get("slug"),
+                "articles": len(r.get("articles") or []),
+            }
+            for r in rows
+        ]
+
     def close(self):
         import httpx
 

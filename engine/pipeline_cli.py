@@ -18,6 +18,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from config import Config, load_config, redact
 from editor.editor import edit_draft
@@ -234,6 +235,25 @@ def _topic_payload(topic: dict) -> dict:
     }
 
 
+def _pick_author(client) -> Optional[str]:
+    """documentId of the author carrying the fewest articles, for an even split.
+
+    Ties break on slug, so the choice is deterministic. Returns None when the CMS
+    has no authors (or no authors content type) — the byline is optional, so a
+    Strapi without it must not break the pipeline.
+    """
+    try:
+        authors = client.list_authors()
+    except (StrapiError, AttributeError):
+        # No authors content type / client without author support: the byline is
+        # optional, so drafting must not fail over it.
+        return None
+    candidates = [a for a in authors if a.get("documentId")]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda a: (a.get("articles", 0), a.get("slug") or ""))[0]["documentId"]
+
+
 def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     started_at = time.monotonic()
     topic_doc = client.get_topic_by_slug(slug)
@@ -295,6 +315,10 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     if isinstance(kw_val, list):
         kw_val = ", ".join(kw_val)
 
+    # Byline: the author carrying the fewest articles, so new posts keep the split
+    # even without anyone assigning them by hand. Omitted if the CMS has no authors.
+    author_id = _pick_author(client)
+
     article = client.create_article(
         {
             "title": topic["title"],
@@ -308,6 +332,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
             "seoScore": seo.seo_score,
             "confidence": seo.confidence,
             "status": "draft",
+            **({"author": author_id} if author_id else {}),
         }
     )
     article_doc = article.get("data", {})
@@ -337,6 +362,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
             "event": "article_created",
             "slug": slug,
             "articleDocumentId": article_id,
+            "authorDocumentId": author_id,
             "seoScore": seo.seo_score,
             "confidence": seo.confidence,
             "decision": decision.decision.value,

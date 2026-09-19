@@ -1,0 +1,45 @@
+{
+  "kind": "collectionType",
+  "collectionName": "authors",
+  "info": {
+    "singularName": "author",
+    "pluralName": "authors",
+    "displayName": "Author",
+    "description": "Byline identity for articles — powers the on-page byline, the Person JSON-LD and the /author pages"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "unique": true,
+      "maxLength": 80
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "name",
+      "required": true
+    },
+    "role": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "bio": {
+      "type": "text",
+      "maxLength": 600
+    },
+    "credentials": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "articles": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::article.article",
+      "mappedBy": "author"
+    }
+  }
+}
