@@ -3,7 +3,7 @@
 CLI (via engine/cli.py):
   python -m engine.cli next                # show next pending topic
   python -m engine.cli draft-one <slug>    # run full pipeline on one topic
-  python -m engine.cli run-batch [N]       # process up to N pending topics
+  python -m engine.cli run-batch [N]       # process up to N pending topics (N >= 1)
   python -m engine.cli drafts              # list drafts in Strapi
   python -m engine.cli info                # show config (redacted)
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import sys
+import time
 from pathlib import Path
 
 from config import Config, load_config, redact
@@ -29,6 +30,51 @@ from strapi import StrapiClient, StrapiError
 
 STATE_FILE = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
 
+# Per-topic wall-clock budget across ALL stages (2026-09-18). The per-stage
+# budgets in llm.STAGE_BUDGET_SECONDS bound each stage (240+360+300 = 900s); this
+# bounds their sum so a single topic can never consume the whole job — the caller
+# (cron entrypoint or dashboard) then still gets a clean, diagnosed return
+# instead of a kill.
+TOPIC_BUDGET_SECONDS = 900.0
+
+# --- Stale in-flight reclaim (2026-09-18) ------------------------------------
+# A topic whose run is killed mid-flight (cron tree-kill at the 3600s cap, a tool
+# timeout, an OOM) is left in one of these statuses. list_pending_topics() only
+# ever asks for `pending`, so such a topic becomes invisible to every later batch
+# and the queue silently runs one topic short forever (two live instances on
+# 2026-09-18 — one leaked by the production timeout, one by a killed trigger).
+INFLIGHT_STATUSES = ("researching", "drafting")
+
+# Terminal statuses are never candidates: `in_review`/`published` already have an
+# article and `failed` is an explicit verdict — resetting one would re-draft a
+# finished topic.
+TERMINAL_STATUSES = ("in_review", "failed", "published")
+
+# Staleness threshold for reclaiming an in-flight topic. Timeout ladder (must stay
+# in sync with ~/.hermes/scripts/nomadomics_daily_draft.sh):
+#   per-stage budgets 240/360/300s (llm.STAGE_BUDGET_SECONDS)
+#     < per-topic budget TOPIC_BUDGET_SECONDS = 900s
+#       < STALE_INFLIGHT_SECONDS = 2 x 900s = 1800s
+#         < batch guard 2700s < cron tree-kill cap 3600s
+# 2x the worst-case topic budget means a topic that is legitimately still running
+# (even with every stage at its full budget) is never reclaimed, while one
+# orphaned by a killed run is back in the queue by the next batch. Derived from
+# TOPIC_BUDGET_SECONDS — never re-typed as a literal.
+STALE_INFLIGHT_SECONDS = TOPIC_BUDGET_SECONDS * 2
+
+# Reclaim records from the most recent run_batch() in this process, surfaced by
+# main() — see last_reclaimed().
+_last_reclaimed: list[dict] = []
+
+
+def _topic_budget_check(started_at: float, stage: str) -> None:
+    """Raise once a single topic has spent its whole cross-stage budget."""
+    if time.monotonic() - started_at >= TOPIC_BUDGET_SECONDS:
+        raise TimeoutError(
+            f"{stage}: per-topic budget {TOPIC_BUDGET_SECONDS:.0f}s exhausted — "
+            "aborting this topic (it stays pending for the next run)"
+        )
+
 
 def _now_iso() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -38,6 +84,110 @@ def _append_state(entry: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with STATE_FILE.open("a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def _parse_strapi_ts(value) -> _dt.datetime | None:
+    """Parse a Strapi timestamp ('...Z' or '+00:00') into an aware datetime.
+
+    Returns None for anything unparseable, so the caller can fail safe (an
+    undatable in-flight topic is left alone rather than reset blindly).
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = _dt.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=_dt.timezone.utc)
+
+
+def _article_created_slugs(state_file: Path | None = None) -> set[str]:
+    """Slugs that already produced an article, per the pipeline journal.
+
+    A slug in here must never be reset to pending: the article exists, so a
+    re-run of the pipeline would create a DUPLICATE article.
+    """
+    path = state_file or STATE_FILE
+    slugs: set[str] = set()
+    if not path.exists():
+        return slugs
+    with path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue  # a killed run can leave a torn final line
+            if entry.get("event") == "article_created" and entry.get("slug"):
+                slugs.add(entry["slug"])
+    return slugs
+
+
+def reclaim_stale_topics(
+    client: StrapiClient,
+    *,
+    now: _dt.datetime | None = None,
+    threshold_seconds: float | None = None,
+    state_file: Path | None = None,
+) -> list[dict]:
+    """Return topics orphaned in researching/drafting by a killed run to `pending`.
+
+    Runs at the start of every batch, before the pending queue is listed. Bounded:
+    one filtered read plus one PUT per genuinely stale topic; no new state file
+    (pipeline.jsonl stays the single journal). Two hard safety rules:
+
+    * a topic in a terminal status is never touched, and
+    * a slug with an `article_created` row is never reset (no duplicate articles).
+    """
+    threshold = STALE_INFLIGHT_SECONDS if threshold_seconds is None else threshold_seconds
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    cutoff = now - _dt.timedelta(seconds=threshold)
+    rows = client.list_inflight_topics(INFLIGHT_STATUSES, updated_before=cutoff.isoformat())
+    already_written = _article_created_slugs(state_file)
+    reclaimed: list[dict] = []
+
+    for doc in rows:
+        slug = doc.get("slug")
+        doc_id = doc.get("documentId")
+        status = doc.get("status")
+        if not slug or not doc_id or status not in INFLIGHT_STATUSES:
+            continue  # unknown/terminal status (or nothing to PUT to): never touch
+        updated_at = _parse_strapi_ts(doc.get("updatedAt"))
+        if updated_at is None:
+            continue  # undatable -> fail safe, leave it alone
+        age = (now - updated_at).total_seconds()
+        if age < threshold:
+            continue  # inside its budget window -> a live run still owns it
+        if slug in already_written:
+            _append_state(
+                {
+                    "ts": _now_iso(),
+                    "event": "reclaim_skipped",
+                    "slug": slug,
+                    "reason": "article_created",
+                    "from": status,
+                    "ageSeconds": round(age, 1),
+                }
+            )
+            continue
+
+        client.update_topic(doc_id, {"status": "pending"})
+        reclaimed.append({"slug": slug, "from": status, "ageSeconds": round(age, 1)})
+        _append_state(
+            {
+                "ts": _now_iso(),
+                "event": "reclaim_stale",
+                "slug": slug,
+                "from": status,
+                "to": "pending",
+                "ageSeconds": round(age, 1),
+                "documentId": doc_id,
+            }
+        )
+
+    return reclaimed
 
 
 def _attrs(doc: dict) -> dict:
@@ -85,6 +235,7 @@ def _topic_payload(topic: dict) -> dict:
 
 
 def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
+    started_at = time.monotonic()
     topic_doc = client.get_topic_by_slug(slug)
     if not topic_doc:
         raise StrapiError(f"topic not found: {slug}")
@@ -95,6 +246,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
 
     primary = topic["primaryKeyword"] or (topic["targetKeywords"] or [""])[0]
     try:
+        _topic_budget_check(started_at, "research")
         research = research_topic(topic["title"], primary, config=cfg)
         ok, errs, warns = validate_research(research)
         if not ok:
@@ -108,6 +260,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     # draft
     client.update_topic(topic["documentId"], {"status": "drafting"})
     try:
+        _topic_budget_check(started_at, "draft")
         draft = draft_article(
             topic["title"], primary, research, target_words=topic["targetWordCount"], config=cfg
         )
@@ -118,6 +271,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
 
     # edit (QA/polish pass between draft and scoring — 2b)
     try:
+        _topic_budget_check(started_at, "edit")
         edited = edit_draft(draft, topic["title"], primary, research, config=cfg)
     except Exception as e:
         # Editor degrades gracefully internally; this is a last-resort guard.
@@ -206,7 +360,50 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     }
 
 
-def run_batch(client: StrapiClient, cfg: Config, limit: int = 3) -> list[dict]:
+# `run-batch 0` is NOT a dry run (2026-09-18): Strapi clamps `pageSize=0` to a
+# non-empty first page (measured live: pageSize=0 -> data=1 row, meta.total=2), so
+# a zero limit reaches draft_one() and drafts one real topic — real LLM spend, a
+# real article, a real review TODO. Zero/negative limits are therefore refused
+# outright (loudly, before any Strapi read or write) instead of being clamped, so
+# a misuse can never be mistaken for the legitimately empty "Processed 0 topic(s)."
+# queue-drained result. To inspect the queue without drafting, use `engine.cli next`.
+MIN_BATCH_LIMIT = 1
+
+
+def _parse_batch_limit(raw: str) -> int:
+    """Parse the `run-batch [N]` argument; raise ValueError on anything that is not
+    a whole number >= MIN_BATCH_LIMIT."""
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"limit must be a whole number >= {MIN_BATCH_LIMIT} (got {raw!r})")
+    if limit < MIN_BATCH_LIMIT:
+        raise ValueError(
+            f"limit must be >= {MIN_BATCH_LIMIT} (got {limit}) — 'run-batch 0' is not a "
+            "dry run: Strapi clamps pageSize=0 to one row, so it would draft a real topic"
+        )
+    return limit
+
+
+def run_batch(
+    client: StrapiClient, cfg: Config, limit: int = 3, *, reclaim: bool = True
+) -> list[dict]:
+    global _last_reclaimed
+
+    # Refuse a zero/negative limit before touching Strapi at all: no reclaim, no
+    # listing, no state write, no draft. (See MIN_BATCH_LIMIT above.)
+    if limit < MIN_BATCH_LIMIT:
+        _last_reclaimed = []
+        raise ValueError(
+            f"run_batch: limit must be >= {MIN_BATCH_LIMIT} (got {limit}) — 'run-batch 0' "
+            "is not a dry run (Strapi clamps pageSize=0 to one row); nothing was listed "
+            "or drafted"
+        )
+
+    # Queue hygiene first: a previous run killed mid-topic left its topic in
+    # researching/drafting, which list_pending_topics() can never see again.
+    _last_reclaimed = reclaim_stale_topics(client) if reclaim else []
+
     topics = client.list_pending_topics(limit=limit)
     if not topics:
         return []
@@ -220,6 +417,16 @@ def run_batch(client: StrapiClient, cfg: Config, limit: int = 3) -> list[dict]:
         except Exception as e:
             print(f"  !! {slug}: failed ({e})", file=sys.stderr)
     return results
+
+
+def last_reclaimed() -> list[dict]:
+    """Reclaim records produced by the most recent run_batch() in this process.
+
+    Kept out of run_batch's return value (dashboards iterate it) and out of
+    run_batch's own stdout: the cron entrypoint reads the FIRST line of output as
+    the batch summary, so the reclaim notice is printed by main() after it.
+    """
+    return list(_last_reclaimed)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -247,12 +454,32 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if cmd == "run-batch":
-            n = int(argv[1]) if len(argv) > 1 else 3
+            # A zero/negative limit is rejected (exit 2), never passed through:
+            # `pagination[pageSize]=0` is clamped by Strapi to a non-empty page, so
+            # it would draft a real topic. See MIN_BATCH_LIMIT.
+            try:
+                n = _parse_batch_limit(argv[1] if len(argv) > 1 else "3")
+            except ValueError as e:
+                print(f"run-batch: refused — {e}", file=sys.stderr)
+                print(
+                    "  (nothing was listed or drafted; use 'python -m engine.cli next' "
+                    "to inspect the queue)",
+                    file=sys.stderr,
+                )
+                return 2
             results = run_batch(client, cfg, n)
             print(f"Processed {len(results)} topic(s).")
             for r in results:
                 state = "PUBLISHED" if r.get("published") else r["decision"]
                 print(f'  - {r["title"]} | conf={r["confidence"]} | {state}')
+            # After the summary line (the cron entrypoint reads line 1 as the
+            # batch summary) and with a marker that cannot be mistaken for an
+            # article row (those start with "  - ").
+            for rec in last_reclaimed():
+                print(
+                    f'  ~ reclaimed stale topic {rec["slug"]} '
+                    f'({rec["from"]}, idle {rec["ageSeconds"]:.0f}s) -> pending'
+                )
             return 0
 
         if cmd == "drafts":

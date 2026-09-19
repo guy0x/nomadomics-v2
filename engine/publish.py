@@ -25,7 +25,15 @@ from pathlib import Path
 import httpx
 
 from config import Config, load_config
-from llm import endpoint_for, headers_for, resolve, stage_chain
+from llm import (
+    LLM_TIMEOUT,
+    StageBudget,
+    endpoint_for,
+    headers_for,
+    is_retryable_status,
+    resolve,
+    stage_chain,
+)
 from strapi import StrapiClient, StrapiError
 
 PUBLISH_STATE_FILE = Path(__file__).resolve().parent / "state" / "publish-pipeline.jsonl"
@@ -221,25 +229,38 @@ def polish_article(
         "temperature": 0.3,
         "response_format": {"type": "json_object"},
     }
-    client = httpx.Client(timeout=180)
+    client = httpx.Client(timeout=LLM_TIMEOUT)
+    budget = StageBudget("edit")
     try:
         for entry in chain:
+            if budget.expired():
+                print(f"  ! polish chain budget exhausted ({budget.exhaustion_reason()})", file=sys.stderr)
+                break
             provider, model_id = resolve(cfg, entry)
             base_url, _ = endpoint_for(cfg, provider)
             headers = headers_for(cfg, provider)
             payload["model"] = model_id
+            if not budget.take():
+                break
+            started = time.monotonic()
             try:
                 resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
                 if resp.status_code == 429:
+                    budget.note(provider, model_id, "429 rate-limited — skipping hop", started)
                     time.sleep(2)
+                    continue
+                if not is_retryable_status(resp.status_code):
+                    budget.note(provider, model_id, f"{resp.status_code} non-retryable — skipping hop", started)
                     continue
                 resp.raise_for_status()
                 content = resp.json()["choices"][0]["message"]["content"]
                 result = _parse_polish(content, article)
                 if result is not None:
+                    budget.note(provider, model_id, "200 ok", started)
                     return result
+                budget.note(provider, model_id, "200 but unparseable polish", started)
             except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, KeyError) as e:
-                print(f"  ! polish attempt failed ({provider}/{model_id}): {e}", file=sys.stderr)
+                budget.note(provider, model_id, f"error {type(e).__name__}", started, extra=f" — {e}")
                 continue
 
         # Free chain exhausted — Cake Nano chat fallback (same key as cover art).

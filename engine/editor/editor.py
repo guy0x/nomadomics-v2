@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,7 +26,16 @@ from typing import Optional
 import httpx
 
 from config import Config
-from llm import endpoint_for, headers_for, resolve, stage_chain
+from llm import (
+    LLM_TIMEOUT,
+    StageBudget,
+    StageDeadlineExceeded,
+    endpoint_for,
+    headers_for,
+    is_retryable_status,
+    resolve,
+    stage_chain,
+)
 from research.research import ResearchResult
 from writer.writer import ArticleDraft, _load_prompt
 
@@ -135,7 +145,7 @@ def edit_draft(
     client = http_client
     own = False
     if client is None:
-        client = httpx.Client(timeout=180)
+        client = httpx.Client(timeout=LLM_TIMEOUT)
         own = True
 
     chain = [(None, model)] if model else stage_chain(cfg, "edit")
@@ -149,29 +159,46 @@ def edit_draft(
         "response_format": {"type": "json_object"},
     }
 
+    budget = StageBudget("edit")
     last_err: Exception | None = None
     try:
         for entry in chain:
+            if budget.expired():
+                break
             provider, model_id = resolve(cfg, entry)
             base_url, _ = endpoint_for(cfg, provider)
             headers = headers_for(cfg, provider)
             payload["model"] = model_id
             for attempt in range(max_retries + 1):
+                if not budget.take():
+                    break
+                started = time.monotonic()
                 try:
                     resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
                     if resp.status_code == 429:
+                        budget.note(provider, model_id, "429 rate-limited — retrying", started)
                         time.sleep(2.0 * (attempt + 1))
                         continue
+                    if not is_retryable_status(resp.status_code):
+                        budget.note(provider, model_id, f"{resp.status_code} non-retryable — skipping hop", started)
+                        last_err = RuntimeError(f"{provider}/{model_id} -> HTTP {resp.status_code}")
+                        break
                     resp.raise_for_status()
                     data = resp.json()
                     content = data["choices"][0]["message"]["content"]
                     edited = _extract_edit(content, draft)
                     if edited.has_content:
+                        budget.note(provider, model_id, "200 ok", started, extra=f" — {edited.word_count} words")
                         return edited
+                    budget.note(provider, model_id, "200 but empty edit", started)
                     last_err = ValueError("edit parsed to no content")
                 except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, KeyError) as e:
+                    budget.note(provider, model_id, f"error {type(e).__name__}", started, extra=f" — {e}")
                     last_err = e
                     time.sleep(1.5 * (attempt + 1))
+        if budget.expired():
+            print(f"  [edit] {budget.exhaustion_reason()}", file=sys.stderr, flush=True)
+            last_err = last_err or StageDeadlineExceeded(f"edit: {budget.exhaustion_reason()}")
     finally:
         if own:
             client.close()

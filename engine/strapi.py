@@ -59,6 +59,31 @@ class StrapiClient:
         )
         return data.get("data", [])
 
+    def list_inflight_topics(
+        self,
+        statuses: tuple = ("researching", "drafting"),
+        *,
+        updated_before: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Fetch topics sitting in an in-flight status, oldest-updated first.
+
+        Used by the stale-topic reclaim (pipeline_cli.reclaim_stale_topics) to
+        find runs that died mid-topic: `list_pending_topics` can never see those
+        rows again. `updated_before` (ISO-8601) adds a server-side
+        `updatedAt $lt` cutoff; the caller re-checks the age in Python.
+        """
+        params: dict = {
+            "sort": "updatedAt:asc",
+            "pagination[pageSize]": limit,
+        }
+        for i, status in enumerate(statuses):
+            params[f"filters[status][$in][{i}]"] = status
+        if updated_before:
+            params["filters[updatedAt][$lt]"] = updated_before
+        data = self._request("GET", "/api/topics", params=params)
+        return data.get("data", [])
+
     def get_topic_by_slug(self, slug: str) -> Optional[dict]:
         data = self._request(
             "GET",

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -28,7 +29,16 @@ from typing import Optional
 import httpx
 
 from config import Config
-from llm import endpoint_for, headers_for, resolve, stage_chain
+from llm import (
+    LLM_TIMEOUT,
+    StageBudget,
+    StageDeadlineExceeded,
+    endpoint_for,
+    headers_for,
+    is_retryable_status,
+    resolve,
+    stage_chain,
+)
 
 RESEARCH_SYSTEM_PROMPT = """You are a travel-finance research assistant for a money-savvy travel blog (Nomadomics).
 
@@ -176,7 +186,7 @@ def research_topic(
     client = http_client
     own_client = False
     if client is None:
-        client = httpx.Client(timeout=60)
+        client = httpx.Client(timeout=LLM_TIMEOUT)
         own_client = True
 
     # Explicit model -> single (provider, model). Otherwise the stage chain
@@ -199,19 +209,30 @@ def research_topic(
         "response_format": {"type": "json_object"},
     }
 
+    budget = StageBudget("research")
     last_err: Exception | None = None
     try:
         for entry in chain:
+            if budget.expired():
+                break
             provider, model_id = resolve(cfg, entry)
             base_url, _ = endpoint_for(cfg, provider)
             headers = headers_for(cfg, provider)
             payload["model"] = model_id
             for attempt in range(max_retries + 1):
+                if not budget.take():
+                    break
+                started = time.monotonic()
                 try:
                     resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
                     if resp.status_code == 429:
+                        budget.note(provider, model_id, "429 rate-limited — retrying", started)
                         time.sleep(1.5 * (attempt + 1))
                         continue
+                    if not is_retryable_status(resp.status_code):
+                        budget.note(provider, model_id, f"{resp.status_code} non-retryable — skipping hop", started)
+                        last_err = RuntimeError(f"{provider}/{model_id} -> HTTP {resp.status_code}")
+                        break
                     resp.raise_for_status()
                     data = resp.json()
                     content = data["choices"][0]["message"]["content"]
@@ -221,11 +242,19 @@ def research_topic(
                         facts=_parse_facts(parsed),
                         keywords=[str(k).strip() for k in parsed.get("keywords", []) or []],
                     )
+                    budget.note(provider, model_id, "200 ok", started, extra=f" — {len(result.facts)} facts")
                     return result
                 except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, KeyError) as e:
+                    budget.note(provider, model_id, f"error {type(e).__name__}", started, extra=f" — {e}")
                     last_err = e
                     time.sleep(1.0 * (attempt + 1))
             # Tried all retries on this model; move to fallback
+        if budget.expired():
+            reason = budget.exhaustion_reason()
+            print(f"  [research] {reason}", file=sys.stderr, flush=True)
+            if last_err is not None:
+                raise StageDeadlineExceeded(reason) from last_err
+            raise StageDeadlineExceeded(reason)
         if last_err:
             raise last_err
     finally:

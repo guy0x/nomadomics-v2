@@ -4,6 +4,18 @@ Loads settings from the project `.env` (gitignored) without ever printing key
 values. Enforces Guy's 2026-08-11 model rule: the OpenRouter key is allowed to
 call FREE (:free) models only during the testing phase; premium is gated.
 
+Precedence (2026-09-18, the STRAPI_URL trap): the **process environment wins
+over `.env`** — the standard dotenv rule — for every key this loader reads, so a
+single run can be pointed somewhere else, e.g.
+
+    env -u PYTHONPATH STRAPI_URL=http://127.0.0.1:9 .venv/bin/python -m engine.cli next
+
+Until this rule existed, `os.environ` was never consulted, so that command
+silently ran against *live* Strapi. An EMPTY environment value (`FOO=`) counts
+as unset and never clobbers a real `.env` value. Because the override is
+environment-wide, `load_config()` names (never prints the value of) each key the
+environment won, on stderr — the silence was the actual defect.
+
 Never import this outside the engine package without reason. All key values
 live in-memory only and are masked in any repr/log output.
 """
@@ -11,10 +23,25 @@ live in-memory only and are masked in any repr/log output.
 from __future__ import annotations
 
 import os
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+# The keys `load_config()` reads. Listed only so the override rule has a
+# documented surface (and so `env_overrides` reports them); the precedence rule
+# itself is generic — any key the `.env` defines is overridable the same way.
+CONFIG_KEYS = (
+    "STRAPI_URL",
+    "STRAPI_ENGINE_TOKEN",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "PREMIUM_MODEL_ENABLED",
+    "AUTO_PUBLISH_ENABLED",
+    "DASHBOARD_ADMIN_TOKEN",
+)
 
 
 def _load_dotenv(path: Path = ENV_PATH) -> dict[str, str]:
@@ -31,16 +58,43 @@ def _load_dotenv(path: Path = ENV_PATH) -> dict[str, str]:
     return parsed
 
 
+def _resolve_env(
+    *, env_path: Path = ENV_PATH, environ: Mapping[str, str] | None = None
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """`.env` pairs with the process environment overlaid on top.
+
+    Returns `(resolved, overridden_keys)`. Rule: a non-empty process-environment
+    value wins; an absent key, or one present but empty (`STRAPI_URL=` on the
+    command line), is treated as *unset* and leaves the `.env` value alone.
+    `overridden_keys` carries KEY NAMES only — never a value, so a caller can
+    report which settings the environment won without leaking a secret.
+    """
+    file_env = _load_dotenv(env_path)
+    proc_env = os.environ if environ is None else environ
+    resolved = dict(file_env)
+    overridden: list[str] = []
+    for key in sorted(set(file_env) | set(CONFIG_KEYS)):
+        value = (proc_env.get(key) or "").strip()
+        if not value:
+            continue  # absent or empty == unset; never clobber the file value
+        if value != file_env.get(key):
+            overridden.append(key)
+        resolved[key] = value
+    return resolved, tuple(overridden)
+
+
 @dataclass(frozen=True)
 class Config:
     strapi_url: str
-    strapi_engine_token: str
-    openrouter_api_key: str
+    # Secrets are `repr=False` so `repr(cfg)` / f"{cfg}" can never leak them; the
+    # `_secret_fields` tuple below is the guard list for that (2026-09-18).
+    strapi_engine_token: str = field(repr=False)
+    openrouter_api_key: str = field(repr=False)
     # Gemini provider (primary). Key is a copy of Guy's Google key; base_url is the
     # OpenAI-compatible endpoint (generativelanguage.googleapis.com/v1beta/openai) so
     # the existing chat/completions calls work unchanged. Gemini honors json_object /
     # structured output more reliably than OpenRouter free models.
-    gemini_api_key: str = ""
+    gemini_api_key: str = field(default="", repr=False)
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_research_model: str = "gemini-2.5-flash"
     gemini_draft_model: str = "gemini-2.5-flash"
@@ -73,7 +127,12 @@ class Config:
     auto_publish_enabled: bool = False
     # Bearer token guarding the dashboard's mutating endpoints (run-batch, topics/add).
     # Empty disables those endpoints entirely (fail-closed). Never logged.
-    dashboard_admin_token: str = ""
+    dashboard_admin_token: str = field(default="", repr=False)
+    # KEY NAMES (never values) the process environment overrode in the `.env`
+    # for this load — the receipt for a shadow-URL / dry-test override.
+    env_overrides: tuple = ()
+    # Every field named here MUST also be declared `repr=False` above; a test
+    # pins that pairing so a new secret cannot be added unmasked.
     _secret_fields: tuple = field(
         default=("strapi_engine_token", "openrouter_api_key", "gemini_api_key", "dashboard_admin_token"),
         repr=False,
@@ -84,9 +143,22 @@ class Config:
         return m.endswith(":free") or "free" in m.lower()
 
 
-def load_config(*, env_path: Path = ENV_PATH) -> Config:
-    """Build Config from the project .env. Raises if required keys are missing."""
-    env = _load_dotenv(env_path)
+def load_config(
+    *, env_path: Path = ENV_PATH, environ: Mapping[str, str] | None = None
+) -> Config:
+    """Build Config from the project `.env`, overridden by the process environment.
+
+    Raises if required keys are missing from BOTH sources. `environ` defaults to
+    `os.environ` read at call time (injectable for tests).
+    """
+    env, overridden = _resolve_env(env_path=env_path, environ=environ)
+    if overridden:
+        # Loud, key-names-only: an environment override that silently did nothing
+        # is how a "safe" control command once ran against live Strapi.
+        print(
+            f"[config] process environment overrides .env for: {', '.join(overridden)}",
+            file=sys.stderr,
+        )
     missing = [k for k in ("STRAPI_ENGINE_TOKEN", "OPENROUTER_API_KEY") if not env.get(k)]
     if missing:
         raise RuntimeError(
@@ -103,6 +175,7 @@ def load_config(*, env_path: Path = ENV_PATH) -> Config:
         premium_enabled=premium,
         auto_publish_enabled=auto_publish,
         dashboard_admin_token=env.get("DASHBOARD_ADMIN_TOKEN", ""),
+        env_overrides=overridden,
     )
 
 
@@ -120,6 +193,8 @@ def redact(config: Config) -> dict:
         "premium_enabled": config.premium_enabled,
         "auto_publish_enabled": config.auto_publish_enabled,
         "auto_publish_threshold": config.auto_publish_threshold,
+        # Names only; never the overridden values.
+        "env_overrides": list(config.env_overrides),
         "gemini_key_set": bool(config.gemini_api_key),
         "is_free_testing_mode": all(
             config.is_free_model(m) for m in (config.research_model, config.draft_model)

@@ -3,7 +3,7 @@
 Usage (from repo root or engine dir):
   python -m engine.cli next
   python -m engine.cli draft-one <slug>
-  python -m engine.cli run-batch [N]
+  python -m engine.cli run-batch [N]    # process up to N pending topics (N >= 1; 0 is refused)
   python -m engine.cli drafts
   python -m engine.cli info
 """
