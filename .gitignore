@@ -50,3 +50,6 @@ logs/cloudflared.log
 # Engine runtime state (append-only event logs, not source)
 engine/state/
 .env*
+
+# LaunchAgents stderr (runtime, not source)
+logs/*.err
