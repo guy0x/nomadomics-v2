@@ -34,7 +34,7 @@ export default function ArticleCard({ article, priority = false }: { article: St
           {article.title}
         </h3>
         {article.excerpt && (
-          <p className="mt-2 line-clamp-3 flex-1 text-sm leading-6 text-ink-600">{article.excerpt}</p>
+          <p className="mt-2 flex-1 text-sm leading-6 text-ink-600">{article.excerpt}</p>
         )}
         <div className="mt-4 flex items-center justify-between text-xs text-ink-500">
           <span className="flex items-center gap-1">
