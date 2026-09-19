@@ -40,6 +40,7 @@ PUBLISH_STATE_FILE = Path(__file__).resolve().parent / "state" / "publish-pipeli
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PUBLIC_CARDS = REPO_ROOT / "frontend" / "public" / "cards"
 PUBLIC_OG = REPO_ROOT / "frontend" / "public" / "og"
+SNAPSHOT = REPO_ROOT / "frontend" / "scripts" / "published-slugs.json"
 CARD_W, CARD_H = 1200, 630
 MIN_CONFIDENCE = 75
 CAKE_BASE = "https://cake.nano-gpt.com/api/v1"
@@ -470,13 +471,14 @@ def generate_cover(slug: str, title: str, *, http_client: httpx.Client | None = 
 
 
 def commit_assets(slug: str) -> bool:
-    """git add + commit the generated cover assets. Non-fatal."""
+    """git add + commit the generated cover assets and the slug snapshot. Non-fatal."""
     if not slug:
         return False
     cards = f"frontend/public/cards/{slug}.png"
     og = f"frontend/public/og/{slug}.png"
+    snapshot = "frontend/scripts/published-slugs.json"
     try:
-        subprocess.run(["git", "add", cards, og], check=True, cwd=REPO_ROOT,
+        subprocess.run(["git", "add", cards, og, snapshot], check=True, cwd=REPO_ROOT,
                        capture_output=True)
         subprocess.run(
             ["git", "commit", "-m", f"feat(frontend): cover art for {slug}"],
@@ -485,6 +487,30 @@ def commit_assets(slug: str) -> bool:
         return True
     except subprocess.CalledProcessError as e:
         print(f"  !! git commit failed: {e.stderr.decode()}", file=sys.stderr)
+        return False
+
+
+def write_slug_snapshot(slugs) -> bool:
+    """Refresh frontend/scripts/published-slugs.json from the live published set.
+
+    The image gate (`node frontend/scripts/check-images.mjs`) validates against this
+    snapshot, and the publisher was the one path that never updated it — so every
+    publish drifted it and the gate passed against a stale universe (20 published vs
+    15 listed). Writes only when the set actually changed. Best-effort by design:
+    a snapshot failure must never fail a publish.
+    """
+    try:
+        ordered = sorted({s for s in (slugs or []) if s})
+        if not ordered:
+            return False
+        payload = json.dumps(ordered, indent=2)
+        if SNAPSHOT.exists() and SNAPSHOT.read_text() == payload:
+            return False
+        SNAPSHOT.write_text(payload)
+        print(f"  slug snapshot refreshed -> {len(ordered)} published slugs")
+        return True
+    except Exception as e:
+        print(f"  !! slug snapshot refresh failed (non-fatal): {e}", file=sys.stderr)
         return False
 
 
@@ -597,6 +623,9 @@ def publish_one(
             ok = generate_cover(slug, title)
             result["cover"] = "generated" if ok else "failed"
             if ok and not no_commit:
+                # Refresh the gate's snapshot from the live set BEFORE committing, so
+                # the same commit carries art + snapshot (see write_slug_snapshot).
+                write_slug_snapshot([a.get("slug") for a in list_published(client, limit=200)])
                 commit_assets(slug)
         else:
             result["cover"] = "skipped"
