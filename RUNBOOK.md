@@ -104,6 +104,32 @@ One polished article/day auto-publishes with cover art.
   cron store — the hephaestus gateway cannot fire (telegram token conflict
   with the default gateway); the default-profile job is the live one.
 
+## Cover art — provider chain (2026-09-19)
+
+`engine/publish.py` walks an ordered image chain and only gives up when every route
+is unusable:
+
+| # | Route | Model | Key env |
+|---|---|---|---|
+| 1 | `cake.nano-gpt.com` | `hidream` (preferred) | `HERMES_CUSTOM_CAKE_NANO_GPT_COM_API_KEY` |
+| 2 | `api.cheaperinference.com` | `nano-banana-2` | `HERMES_CUSTOM_API_CHEAPERINFERENCE_COM_API_KEY` |
+
+A non-retryable status (401/402/403/404) skips the hop immediately, so a locked or
+capped key no longer ends cover generation. The run prints which route served the
+image (`cover generated via <route>`); `publish-pipeline.jsonl` records
+`cover: generated|failed|skipped`.
+
+Incident this replaces: Cake hit its **weekly token cap** (`401 invalid session`).
+Note `/api/v1/models` still answers 200 without a key — it is public, so it is NOT a
+key check. Cover failure is non-fatal by design, so three consecutive posts published
+with `cover: failed` and nothing retried them. Backfill a missing cover by calling
+`publish.generate_cover(slug, title)` for that slug, then re-run the image gate and
+commit the assets.
+
+`frontend/scripts/published-slugs.json` is hand-maintained: refresh it to the live
+published set whenever an article is published outside the runner, otherwise
+`check-images` validates a stale universe (use `--live` to read Strapi instead).
+
 ## Kill switch (<60s)
 
 - `launchctl unload ~/Library/LaunchAgents/com.nomadomics.strapi.plist` — halts Strapi.
