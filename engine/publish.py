@@ -89,6 +89,22 @@ def _current_year() -> str:
     return _today_utc()[:4]
 
 
+def _fit(text: str, limit: int) -> str:
+    """Trim text to `limit` characters at a word boundary, without an ellipsis.
+
+    Meta fields are capped by the Strapi schema; the polish model overshoots. A
+    hard cut with "..." both spends three characters on punctuation and leaves a
+    snippet that reads as broken, so shorten until the text fits instead.
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" ,;:-–—").rstrip()
+
+
 # ----------------------------------------------------------------------------
 # State
 # ----------------------------------------------------------------------------
@@ -594,11 +610,13 @@ def publish_one(
     new_md = polished["markdown"] if polished else original_md
     new_meta_title = (polished.get("metaTitle") if polished else winner.get("metaTitle")) or ""
     new_meta_desc = (polished.get("metaDescription") if polished else winner.get("metaDescription")) or ""
-    # Enforce Strapi schema length caps (LLM can overshoot).
-    if len(new_meta_title) > 60:
-        new_meta_title = new_meta_title[:57].rstrip() + "..."
-    if len(new_meta_desc) > 160:
-        new_meta_desc = new_meta_desc[:157].rstrip() + "..."
+    # Enforce Strapi schema length caps (LLM can overshoot). Trim at a word
+    # boundary with no ellipsis: "..." spends three of the characters and leaves a
+    # snippet that reads as broken, so a hard cut at 57 + "..." produced meta
+    # titles like "Travel Hacking for Beginners: 10 Simple Ways to Fly Cheap..."
+    # (measured live 2026-09-19). Fit to the cap instead of filling it.
+    new_meta_title = _fit(new_meta_title, 60)
+    new_meta_desc = _fit(new_meta_desc, 160)
     # Deterministic guard: a polish model can stamp a stale year into meta
     # fields (2026-09-14: "…2025" produced in 2026). Force the current year.
     cur_year = _current_year()
