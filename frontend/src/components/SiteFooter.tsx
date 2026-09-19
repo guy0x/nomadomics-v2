@@ -55,6 +55,11 @@ export default function SiteFooter() {
                   About &amp; editorial policy
                 </Link>
               </li>
+              <li>
+                <Link href="/privacy" className="text-sm text-ink-600 hover:text-brand-700">
+                  Privacy policy
+                </Link>
+              </li>
             </ul>
           </div>
         </div>

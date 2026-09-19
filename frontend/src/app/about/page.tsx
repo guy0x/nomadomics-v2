@@ -2,13 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { getAuthors } from "@/lib/strapi";
 import AuthorAvatar from "@/components/AuthorAvatar";
-
-/**
- * Editorial contact address. Single source of truth — change it here.
- * NOTE: the mailbox must actually exist (and the domain must resolve) before this
- * is advertised; until then a reader who writes will get a bounce.
- */
-const CONTACT_EMAIL = "hello@nomadomics.blog";
+import { CONTACT_EMAIL, CONTACT_MAILTO } from "@/lib/contact";
 
 export const metadata: Metadata = {
   title: "About & Editorial Policy",
@@ -92,8 +86,10 @@ export default async function AboutPage() {
         <h2 id="contact">Contact</h2>
         <p>
           Corrections, tips, and questions:{" "}
-          <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. We read
-          everything and reply to corrections first.
+          <a href={CONTACT_MAILTO}>{CONTACT_EMAIL}</a>. We read
+          everything and reply to corrections first. What we collect, and what we
+          do with it, is set out in our{" "}
+          <Link href="/privacy">privacy policy</Link>.
         </p>
       </div>
     </div>
