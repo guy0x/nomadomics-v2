@@ -311,12 +311,23 @@ def polish_article(
 # ----------------------------------------------------------------------------
 
 def _cover_prompt(title: str) -> str:
+    """Cover-art prompt.
+
+    Hard-won (2026-09-19): without an explicit "this is the only text" clause the
+    image models invent extra copy — a comparison table whose data units came back
+    as "10GR/Month" instead of GB — and they mis-spell the headline itself
+    ("BUDJGET TRAVEL HACKS", "NOMLADS", "NIOMOAADS" all shipped on published covers).
+    Naming the headline as the sole text and demanding exact spelling is the cheap
+    mitigation; every new cover still gets read back with a vision check before it
+    is called shipped.
+    """
     return (
-        f"Professional blog article cover image, 1200x630. Title: \"{title}\". "
-        "Clean modern layout, bold readable title text centered, subtle geometric "
-        "or travel-themed background with green (#27976d) and dark ink tones, "
-        "minimalist flat vector style, generous margins, important content centered. "
-        "No people, no watermarks, no logos."
+        f"Professional blog article cover image, 1200x630. The ONLY text anywhere in the "
+        f"image is this headline, spelled exactly as written, in bold readable type: "
+        f"\"{title}\". Do not add any other words, labels, tables, numbers, units, icons "
+        "with text, or logos. Clean modern layout, subtle geometric or travel-themed "
+        "background with green (#27976d) and dark ink tones, minimalist flat vector "
+        "style, generous margins, important content centered. No people, no watermarks."
     )
 
 
