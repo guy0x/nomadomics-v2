@@ -19,6 +19,7 @@ import ReadingProgress from "@/components/ReadingProgress";
 import AdvertiserDisclosure from "@/components/AdvertiserDisclosure";
 import ArticleCard from "@/components/ArticleCard";
 import { ogImageFor, cardImageFor } from "@/lib/images";
+import { titledWithBrand } from "@/lib/seo";
 import Image from "next/image";
 import { Clock, ChevronRight } from "@/components/Icons";
 
@@ -45,8 +46,12 @@ export async function generateMetadata({
   const description = article.metaDescription ?? article.excerpt ?? undefined;
   const url = `${SITE_URL}/${article.slug}`;
 
+  // Meta titles are authored to a ~60-character SERP budget. The layout's
+  // "%s · Nomadomics" template pushes four of them to 65-73 characters, which
+  // truncates the headline itself in results — so the brand suffix is only
+  // spent when it still fits (it also appears in og:site_name and JSON-LD).
   return {
-    title,
+    title: { absolute: titledWithBrand(title) },
     description,
     alternates: { canonical: url },
     openGraph: {
