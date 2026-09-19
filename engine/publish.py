@@ -46,6 +46,20 @@ CAKE_BASE = "https://cake.nano-gpt.com/api/v1"
 CAKE_MODEL = "hidream"
 CAKE_SIZE = "1536x1024"
 CAKE_KEY_ENV = "HERMES_CUSTOM_CAKE_NANO_GPT_COM_API_KEY"
+
+# Fallback image route (2026-09-19). Cake is the preferred model (Guy), but a
+# weekly-cap lockout or a rotated key returns 401 and cover generation failed
+# NON-FATALLY — the article published anyway, so three consecutive posts went live
+# with no card/OG art and nothing retried them (publish state: cover "failed"
+# 09-16, 09-17, 09-18). The fleet's live provider exposes image models on the same
+# OpenAI-compatible route, so cover art now walks an ordered chain and only gives
+# up when every route is unusable. Verified 2026-09-19: nano-banana-2 returns
+# b64_json PNG in ~19s, gpt-image-2 in ~15s, nano-banana returns a data: URL.
+FALLBACK_IMAGE_BASE = "https://api.cheaperinference.com/v1"
+FALLBACK_IMAGE_MODEL = "nano-banana-2"
+FALLBACK_IMAGE_SIZE = "1536x1024"
+FALLBACK_IMAGE_KEY_ENV = "HERMES_CUSTOM_API_CHEAPERINFERENCE_COM_API_KEY"
+COVER_TIMEOUT_SECONDS = 180.0
 # Last-resort polish model (paid but pennies) — used when the free chain fails.
 CAKE_CHAT_MODEL = "z-ai/glm-5.3-flash"
 
@@ -296,43 +310,124 @@ def polish_article(
 # Cover art
 # ----------------------------------------------------------------------------
 
-def generate_cover(slug: str, title: str, *, http_client: httpx.Client | None = None) -> bool:
-    """Generate card + OG cover for an article via Cake Nano HiDream.
-    Saves PNG to frontend/public/cards/<slug>.png and frontend/public/og/<slug>.png.
-    Returns True on success."""
-    if not slug:
-        return False
-    key = os.environ.get(CAKE_KEY_ENV, "")
-    if not key:
-        print("  !! cake key missing — skipping image gen", file=sys.stderr)
-        return False
-
-    prompt = (
+def _cover_prompt(title: str) -> str:
+    return (
         f"Professional blog article cover image, 1200x630. Title: \"{title}\". "
         "Clean modern layout, bold readable title text centered, subtle geometric "
         "or travel-themed background with green (#27976d) and dark ink tones, "
         "minimalist flat vector style, generous margins, important content centered. "
         "No people, no watermarks, no logos."
     )
-    client = http_client or httpx.Client(timeout=180)
+
+
+def image_routes() -> list[dict]:
+    """Ordered image providers for cover art — only those with a key set.
+
+    Cake Nano HiDream first (Guy's preferred model), then the fallback route.
+    "Key present" is not "key valid": a locked or rotated key is discovered on the
+    call itself and the next route takes over.
+    """
+    routes: list[dict] = []
+    for label, base, model, size, key_env in (
+        (f"cake-nano/{CAKE_MODEL}", CAKE_BASE, CAKE_MODEL, CAKE_SIZE, CAKE_KEY_ENV),
+        (FALLBACK_IMAGE_MODEL, FALLBACK_IMAGE_BASE, FALLBACK_IMAGE_MODEL,
+         FALLBACK_IMAGE_SIZE, FALLBACK_IMAGE_KEY_ENV),
+    ):
+        key = os.environ.get(key_env, "")
+        if key:
+            routes.append({"label": label, "base": base, "model": model, "size": size, "key": key})
+    return routes
+
+
+def _extract_image_bytes(payload: dict, *, http_client: httpx.Client) -> bytes | None:
+    """Image bytes out of an /images/generations response, across provider shapes.
+
+    Seen live: `b64_json` (cake, nano-banana-2, gpt-image-2), a `data:` URL
+    (nano-banana), or a plain http URL to fetch.
+    """
+    items = payload.get("data") or []
+    if not items or not isinstance(items[0], dict):
+        return None
+    item = items[0]
+    b64 = (item.get("b64_json") or "").strip()
+    if not b64:
+        url = (item.get("url") or "").strip()
+        if url.startswith("data:"):
+            b64 = url.partition(",")[2].strip()
+        elif url.startswith("http"):
+            fetched = http_client.get(url, timeout=COVER_TIMEOUT_SECONDS)
+            fetched.raise_for_status()
+            return fetched.content or None
+    if not b64:
+        return None
+    try:
+        return base64.b64decode(b64)
+    except (ValueError, TypeError):
+        return None
+
+
+def fetch_cover_bytes(
+    title: str, *, http_client: httpx.Client | None = None
+) -> tuple[bytes | None, str]:
+    """First usable cover image across the provider chain -> (bytes, route label)."""
+    routes = image_routes()
+    if not routes:
+        print(
+            "  !! no image provider key available "
+            f"({CAKE_KEY_ENV} / {FALLBACK_IMAGE_KEY_ENV}) — skipping image gen",
+            file=sys.stderr,
+        )
+        return None, ""
+    client = http_client or httpx.Client(timeout=COVER_TIMEOUT_SECONDS)
     own = http_client is None
+    prompt = _cover_prompt(title)
+    try:
+        for route in routes:
+            try:
+                resp = client.post(
+                    f"{route['base']}/images/generations",
+                    headers={
+                        "Authorization": f"Bearer {route['key']}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"model": route["model"], "prompt": prompt, "n": 1, "size": route["size"]},
+                )
+                if not is_retryable_status(resp.status_code):
+                    # 401/402/403/404 — locked, out of quota, or unentitled key.
+                    print(
+                        f"  ! cover route {route['label']} -> HTTP {resp.status_code} "
+                        "(non-retryable) — trying next route",
+                        file=sys.stderr,
+                    )
+                    continue
+                resp.raise_for_status()
+                raw = _extract_image_bytes(resp.json(), http_client=client)
+                if raw:
+                    return raw, route["label"]
+                print(f"  ! cover route {route['label']} returned no image data", file=sys.stderr)
+            except Exception as e:  # network/JSON/HTTP/decode — fall through to the next route
+                print(f"  ! cover route {route['label']} failed: {e}", file=sys.stderr)
+        return None, ""
+    finally:
+        if own:
+            client.close()
+
+
+def generate_cover(slug: str, title: str, *, http_client: httpx.Client | None = None) -> bool:
+    """Generate card + OG cover for an article.
+    Saves PNG to frontend/public/cards/<slug>.png and frontend/public/og/<slug>.png.
+    Returns True on success."""
+    if not slug:
+        return False
+
+    raw, route_label = fetch_cover_bytes(title, http_client=http_client)
+    if not raw:
+        print("  !! cover gen failed on every configured route", file=sys.stderr)
+        return False
+
     tmp = Path(f"/tmp/nm-cover-{slug}.jpg")
     tmp2 = Path(f"/tmp/nm-cover-{slug}-fit.jpg")
     try:
-        resp = client.post(
-            f"{CAKE_BASE}/images/generations",
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
-            json={"model": CAKE_MODEL, "prompt": prompt, "n": 1, "size": CAKE_SIZE},
-        )
-        resp.raise_for_status()
-        item = resp.json().get("data", [{}])[0]
-        b64 = (item.get("b64_json") or "").strip()
-        if not b64:
-            return False
-        raw = base64.b64decode(b64)
         tmp.write_bytes(raw)
 
         # Resize to fit 1200x1200 box (aspect kept), then center-crop to 1200x630,
@@ -349,6 +444,7 @@ def generate_cover(slug: str, title: str, *, http_client: httpx.Client | None = 
                  "--out", str(out), "-s", "format", "png"],
                 check=True, capture_output=True,
             )
+        print(f"  cover generated via {route_label}")
         return True
     except subprocess.CalledProcessError as e:
         print(f"  !! sips failed: {e.stderr.decode()}", file=sys.stderr)
@@ -357,8 +453,6 @@ def generate_cover(slug: str, title: str, *, http_client: httpx.Client | None = 
         print(f"  !! cover gen failed: {e}", file=sys.stderr)
         return False
     finally:
-        if own:
-            client.close()
         for p in (tmp, tmp2):
             if p.exists():
                 p.unlink()
