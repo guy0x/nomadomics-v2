@@ -10,9 +10,12 @@ import { CONTACT_EMAIL, CONTACT_MAILTO } from "@/lib/contact";
  * processing is worse than none:
  *   - no cookies / no client storage: nothing in `src/` touches document.cookie,
  *     localStorage or sessionStorage, and live responses send no Set-Cookie.
- *   - analytics: `@vercel/analytics` (`<Analytics />` in `src/app/layout.tsx`,
- *     server-side proxied so no third-party script is loaded) + Vercel Speed
- *     Insights. Both are cookie-less and aggregate-only.
+ *   - analytics: `@vercel/analytics` ONLY (`<Analytics />` mounted in
+ *     `src/app/layout.tsx`, server-side proxied so no third-party script is
+ *     loaded) — cookie-less and aggregate-only. Vercel Speed Insights is NOT
+ *     installed and no page references it, so it must not be named as a
+ *     processor: re-add it here only once `@vercel/speed-insights` is a
+ *     dependency AND its component is mounted (launch-checklist L5).
  *   - fonts are self-hosted at build time by `next/font/google` — no request to
  *     Google is made from a reader's browser.
  *   - affiliate links live in `src/lib/offers.ts` and render with
@@ -58,8 +61,8 @@ export default function PrivacyPage() {
           </li>
           <li>
             We use <strong>cookie-less, aggregate analytics</strong> (Vercel Web
-            Analytics and Speed Insights) so we know which guides are read and
-            whether pages load fast. We see totals, not you.
+            Analytics) so we know which guides are read and roughly where from.
+            We see totals, not you.
           </li>
           <li>
             Some outbound links are <strong>affiliate links</strong> that earn us
@@ -96,12 +99,12 @@ export default function PrivacyPage() {
         </p>
         <h3 id="analytics">Aggregate analytics</h3>
         <p>
-          We use <strong>Vercel Web Analytics</strong> and{" "}
-          <strong>Vercel Speed Insights</strong>. Both are cookie-less and
-          designed around aggregate measurement rather than individual
-          tracking. A visitor is identified only by a temporary hash derived
-          from the incoming request, and that session is discarded after 24
-          hours. The data points recorded for a page view are:
+          We use <strong>Vercel Web Analytics</strong>, our host&rsquo;s own
+          cookie-less analytics product. It is designed around aggregate
+          measurement rather than individual tracking. A visitor is identified
+          only by a temporary hash derived from the incoming request, and that
+          session is discarded after 24 hours. The data points recorded for a
+          page view are:
         </p>
         <ul>
           <li>the page URL and its route pattern, and the referring page;</li>
@@ -110,16 +113,12 @@ export default function PrivacyPage() {
           </li>
           <li>
             approximate location (country, region, city), device type,
-            operating system and browser version;
-          </li>
-          <li>
-            performance measurements — how quickly the page rendered and
-            responded on your device.
+            operating system and browser version.
           </li>
         </ul>
         <p>
           What we ever see is aggregated: how many people read a guide, roughly
-          where from, on what kind of device, and how fast it loaded. No
+          where from, and on what kind of device. No
           cross-site profile is built, nothing is tied to an identity, and
           nothing is sold. If you have JavaScript disabled, no analytics data is
           collected at all.
