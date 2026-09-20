@@ -302,6 +302,11 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
         # Editor degrades gracefully internally; this is a last-resort guard.
         edited = None
         _append_state({"ts": _now_iso(), "event": "edit_failed", "slug": slug, "error": str(e)})
+    if edited is not None and getattr(edited, "failure_record", None):
+        # Auth-degraded hop (401/403, t_8db05179): the pipeline CONTINUES on the
+        # un-edited draft, but the key-rotation need is journaled here. The
+        # record carries provider/model/status key names only — never key material.
+        _append_state({"ts": _now_iso(), "event": "edit_degraded_auth", "slug": slug, **edited.failure_record})
 
     to_score = edited if edited is not None else draft
 

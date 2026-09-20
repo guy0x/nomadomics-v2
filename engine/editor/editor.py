@@ -28,10 +28,13 @@ import httpx
 from config import Config
 from llm import (
     LLM_TIMEOUT,
+    ProviderAuthError,
     StageBudget,
     StageDeadlineExceeded,
+    auth_failure_record,
     endpoint_for,
     headers_for,
+    is_auth_status,
     is_retryable_status,
     resolve,
     stage_chain,
@@ -72,6 +75,10 @@ class EditedDraft:
     word_count: int = 0
     used_facts: list[str] = field(default_factory=list)
     edit_report: str = ""
+    # Populated only when the hop degraded on a credential rejection (401/403):
+    # the structured, key-material-free failure record that lands in the pipeline
+    # journal. None on the healthy path.
+    failure_record: Optional[dict] = None
 
     @property
     def has_content(self) -> bool:
@@ -161,6 +168,7 @@ def edit_draft(
 
     budget = StageBudget("edit")
     last_err: Exception | None = None
+    auth_failures: list[dict] = []  # structured records for degraded-hop reporting
     try:
         for entry in chain:
             if budget.expired():
@@ -175,6 +183,17 @@ def edit_draft(
                 started = time.monotonic()
                 try:
                     resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                    if is_auth_status(resp.status_code):
+                        # Credential rejection: one attempt, no retry, no key
+                        # material in any message — then the fallback hop.
+                        budget.note(provider, model_id, f"{resp.status_code} auth rejected — skipping hop", started)
+                        rec = auth_failure_record(provider, model_id, resp.status_code, "edit")
+                        auth_failures.append(rec)
+                        # Crisp, single-line alarm at detection time — the cron
+                        # surface greps this even if a fallback hop saves the run.
+                        print(f"  [edit] ALARM: {rec['alarm']} ({rec['provider']}/{rec['model']} HTTP {rec['status']})", file=sys.stderr, flush=True)
+                        last_err = ProviderAuthError(provider, model_id, resp.status_code)
+                        break
                     if resp.status_code == 429:
                         budget.note(provider, model_id, "429 rate-limited — retrying", started)
                         time.sleep(2.0 * (attempt + 1))
@@ -205,9 +224,23 @@ def edit_draft(
 
     # Degrade gracefully: if the editor fails entirely, keep the writer's draft
     # rather than dropping the article. Record the failure in the report.
+    report = f"editor unavailable ({last_err}) — kept original draft"
+    failure_record: dict | None = None
+    if auth_failures:
+        # Structured, key-material-free degradation record for the pipeline journal;
+        # the rotation alarm line itself was already emitted when the hop was rejected.
+        failure_record = {
+            "kind": "stage_degraded_auth",
+            "stage": "edit",
+            "outcome": "kept_original_draft",
+            "hops": auth_failures,
+            "error": str(last_err),
+        }
+        report = f"{report} | auth_failure: {json.dumps(failure_record)}"
     return EditedDraft(
         markdown=draft.markdown,
         word_count=draft.word_count,
         used_facts=list(draft.used_facts),
-        edit_report=f"editor unavailable ({last_err}) — kept original draft",
+        edit_report=report,
+        failure_record=failure_record,
     )

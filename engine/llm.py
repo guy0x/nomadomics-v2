@@ -53,6 +53,46 @@ class StageDeadlineExceeded(RuntimeError):
     """A stage spent its whole wall-clock budget without a usable result."""
 
 
+class ProviderAuthError(RuntimeError):
+    """A hop rejected its credentials (HTTP 401/403) — retrying cannot help.
+
+    Carries only the provider/model name and the status code; never key
+    material. The structured failure record built from it (see
+    auth_failure_record) is what the cron surface greps for rotation alarms.
+    """
+
+    def __init__(self, provider: str, model_id: str, status: int) -> None:
+        self.provider = provider
+        self.model_id = model_id
+        self.status = status
+        super().__init__(f"{provider}/{model_id} -> HTTP {status} (auth rejected)")
+
+
+AUTH_STATUS = frozenset({401, 403})
+GEMINI_KEY_ALARM = "Gemini key invalid - rotation needed"
+
+
+def is_auth_status(status: int) -> bool:
+    """True for credential-rejection statuses (401/403)."""
+    return status in AUTH_STATUS
+
+
+def auth_failure_record(provider: str, model_id: str, status: int, stage: str) -> dict:
+    """Structured failure record for an auth-rejected hop.
+
+    Key names only, status codes only — a key value can never land in the
+    pipeline journal through this path.
+    """
+    return {
+        "kind": "provider_auth_failure",
+        "stage": stage,
+        "provider": provider,
+        "model": model_id,
+        "status": status,
+        "alarm": GEMINI_KEY_ALARM if provider == "gemini" else f"{provider} key invalid - rotation needed",
+    }
+
+
 class StageBudget:
     """Wall-clock + attempt budget for one stage of one topic.
 

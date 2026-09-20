@@ -31,10 +31,12 @@ import httpx
 from config import Config
 from llm import (
     LLM_TIMEOUT,
+    ProviderAuthError,
     StageBudget,
     StageDeadlineExceeded,
     endpoint_for,
     headers_for,
+    is_auth_status,
     is_retryable_status,
     resolve,
     stage_chain,
@@ -225,6 +227,13 @@ def research_topic(
                 started = time.monotonic()
                 try:
                     resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                    if is_auth_status(resp.status_code):
+                        # Credential rejection: one attempt, no retry, then the
+                        # fallback hop. Typed error so callers can distinguish
+                        # dead-key from transient failure.
+                        budget.note(provider, model_id, f"{resp.status_code} auth rejected — skipping hop", started)
+                        last_err = ProviderAuthError(provider, model_id, resp.status_code)
+                        break
                     if resp.status_code == 429:
                         budget.note(provider, model_id, "429 rate-limited — retrying", started)
                         time.sleep(1.5 * (attempt + 1))
