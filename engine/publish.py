@@ -4,7 +4,8 @@ Picks the highest-confidence in_review article (EXCLUDING quarantine-class
 articles — see the QUARANTINED_DECISIONS gate below), runs a focused final
 polish (TL;DR + internal links + meta tightening), generates card/OG cover art
 via Cake Nano, publishes to Strapi (status=published, publishedAt=now), commits
-the cover assets, and verifies the article renders on the live site.
+AND pushes the cover assets to origin/main, and verifies the article page and
+both art URLs are live (a publish is not "done" while its card/og 404).
 
 CLI entrypoint: `publish` command (registered in engine/pipeline_cli.py).
 State: append-only engine/state/publish-pipeline.jsonl (single writer: this module).
@@ -46,6 +47,26 @@ PUBLIC_OG = REPO_ROOT / "frontend" / "public" / "og"
 SNAPSHOT = REPO_ROOT / "frontend" / "scripts" / "published-slugs.json"
 CARD_W, CARD_H = 1200, 630
 MIN_CONFIDENCE = 75
+
+# --- asset shipping + verification (2026-09-20, kanban t_69dcb49a) -----------
+# Cover art only becomes public when its commit reaches origin/main: Vercel
+# deploys this repo from git pushes (docs/HANDOFF-2026-09-07.md:59), so a commit
+# that stays local serves 404 forever. commit_assets() used to stop at
+# `git commit` and the ONLY push in the lane lived in the cron wrapper's
+# `published` branch — so an out-of-band publish (interactive `engine.cli
+# publish`, `--release <slug>`) stranded its art, and a skip-day wrapper run
+# could not sweep it live. Live proof 2026-09-20: the article page for
+# cost-of-living-chiang-mai was 200 while its cards/ and og/ .png were 404
+# (committed 4524ded, never pushed). The push now lives next to the commit so
+# EVERY publish path ships; the wrapper keeps its own (now unconditional) push
+# as the self-heal for anything a previous run stranded.
+# The post-publish live check asserts the art URLs too, with a bounded retry
+# because push -> Vercel deploy is asynchronous: retries absorb propagation lag,
+# but they never mask a genuine miss (a slug with no deployed art still ends
+# `assetsLive: false` and the runner exits non-zero).
+PUSH_TIMEOUT_SECONDS = 180
+ASSET_VERIFY_ATTEMPTS = 10
+ASSET_VERIFY_DELAY_SECONDS = 30.0
 
 # Quarantine gate (2026-09-20, from finding t_cae3c2d2). The draft lane records
 # a policy decision per article; for sensitive topics (taxes/legal/medical/
@@ -672,6 +693,96 @@ def commit_assets(slug: str) -> bool:
         return False
 
 
+def pending_asset_commits() -> int:
+    """Commits on local main that origin/main does not have (-1 when unknown).
+
+    Any nonzero value means cover art (or a slug snapshot) is committed locally
+    and therefore NOT public yet. -1 = git could not tell us (no origin ref, git
+    unavailable); the caller then simply attempts the push and lets it report.
+    """
+    try:
+        p = subprocess.run(
+            ["git", "rev-list", "--count", "origin/main..HEAD"],
+            check=True, cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
+        )
+        return int(p.stdout.strip() or "0")
+    except Exception:
+        return -1
+
+
+def push_assets() -> tuple[bool, str]:
+    """Ship pending commits to origin/main — the step that makes art public.
+
+    Returns (ok, detail). Never raises: a push failure must be reported, not
+    swallowed (the runner records it and the wrapper exits non-zero), and it is
+    bounded by PUSH_TIMEOUT_SECONDS so a wedged push/credential prompt cannot
+    outlive the run.
+    """
+    ahead = pending_asset_commits()
+    if ahead == 0:
+        return True, "nothing to push (origin/main is up to date)"
+    try:
+        p = subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=PUSH_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"git push timed out after {PUSH_TIMEOUT_SECONDS}s"
+    except Exception as e:
+        return False, f"git push failed: {e}"
+    if p.returncode != 0:
+        return False, ((p.stderr or p.stdout or "").strip() or f"git push exit {p.returncode}")[:400]
+    return True, f"pushed {ahead} commit(s)" if ahead > 0 else "pushed"
+
+
+def asset_verify_bounds() -> tuple[int, float]:
+    """Attempts + delay for the asset live check (env-overridable for rehearsals)."""
+    try:
+        attempts = max(1, int(os.environ.get("NOMADOMICS_ASSET_VERIFY_ATTEMPTS", ASSET_VERIFY_ATTEMPTS)))
+    except (TypeError, ValueError):
+        attempts = ASSET_VERIFY_ATTEMPTS
+    try:
+        delay = max(0.0, float(os.environ.get("NOMADOMICS_ASSET_VERIFY_DELAY", ASSET_VERIFY_DELAY_SECONDS)))
+    except (TypeError, ValueError):
+        delay = ASSET_VERIFY_DELAY_SECONDS
+    return attempts, delay
+
+
+def verify_assets_live(slug: str, site: str, *, attempts: int | None = None,
+                       delay: float | None = None) -> dict:
+    """Assert the card + og PNGs are actually served, retrying past deploy lag.
+
+    Same two URLs the monitor asserts (`nomadomics_content_invariants.py`:190-193).
+    A push -> Vercel deploy takes a minute or two, so a just-pushed asset can 404
+    briefly; the bounded retry absorbs that window. It does NOT mask a real miss:
+    art that was never pushed, or a failed deploy, still ends `assetsLive: false`
+    after the last attempt, and publish_one then reports `live: false`.
+    """
+    n, d = asset_verify_bounds()
+    if attempts is not None:
+        n = max(1, attempts)
+    if delay is not None:
+        d = max(0.0, delay)
+
+    status: dict[str, int] = {}
+    pending = {kind: f"{site}/{kind}/{slug}.png" for kind in ("cards", "og")}
+    for attempt in range(1, n + 1):
+        for kind in list(pending):
+            try:
+                r = httpx.get(pending[kind], timeout=20, follow_redirects=True)
+                code = r.status_code
+            except Exception:
+                code = 0  # unreachable / DNS / timeout -> not live
+            status[kind] = code
+            if code == 200:
+                del pending[kind]
+        if not pending:
+            return {"assetsLive": True, "assetStatus": status, "assetAttempts": attempt}
+        if attempt < n and d:
+            time.sleep(d)
+    return {"assetsLive": False, "assetStatus": status, "assetAttempts": n}
+
+
 def write_slug_snapshot(slugs) -> bool:
     """Refresh frontend/scripts/published-slugs.json from the live published set.
 
@@ -841,6 +952,16 @@ def publish_one(
                 # the same commit carries art + snapshot (see write_slug_snapshot).
                 write_slug_snapshot([a.get("slug") for a in list_published(client, limit=200)])
                 commit_assets(slug)
+                # Ship it (2026-09-20, t_69dcb49a): committing is not publishing —
+                # Vercel serves only what is on origin/main, so an unpushed commit
+                # leaves the page 200 and its art 404.
+                print("  pushing cover art to origin…")
+                push_ok, push_detail = push_assets()
+                result["push"] = "ok" if push_ok else "failed"
+                result["pushDetail"] = push_detail
+                print(f"  push: {push_detail}")
+                if not push_ok:
+                    print(f"  !! asset push failed: {push_detail}", file=sys.stderr)
         else:
             result["cover"] = "skipped"
 
@@ -855,16 +976,29 @@ def publish_one(
             "cover": result.get("cover", "skipped"),
         })
 
-        # verify live on the deployed frontend
+        # verify live on the deployed frontend — the page AND its cover art.
+        # The page renders dynamically (Strapi), so checking the page alone
+        # reported `live: true` for art that 404'd (2026-09-20). Art is a static
+        # file that exists only once origin/main's commit is deployed, so it is
+        # asserted separately, with a bounded retry for deploy lag.
         site = (os.environ.get("SITE_URL") or "https://nomadomics-v2.vercel.app").rstrip("/")
         live_url = f"{site}/{slug}"
         result["liveUrl"] = live_url
         try:
             r = httpx.get(live_url, timeout=25, follow_redirects=True)
             result["httpStatus"] = r.status_code
-            result["live"] = r.status_code == 200 and (title.split()[0] in r.text)
+            page_live = r.status_code == 200 and (title.split()[0] in r.text)
         except Exception as e:
-            result["live"] = False
+            page_live = False
             result["verifyError"] = str(e)
+
+        if not skip_image and not no_commit:
+            # This run was supposed to ship art -> its live status is part of
+            # "published", not a footnote. A true miss keeps live=false.
+            print(f"  verifying cover art is live (up to {asset_verify_bounds()[0]} attempts)…")
+            result.update(verify_assets_live(slug, site))
+            result["live"] = page_live and bool(result.get("assetsLive"))
+        else:
+            result["live"] = page_live
 
     return result

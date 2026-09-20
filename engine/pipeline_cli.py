@@ -637,6 +637,19 @@ def main(argv: list[str] | None = None) -> int:
                 no_commit=no_commit,
             )
             print(json.dumps(result, indent=2))
+            # Exit non-zero when a publish shipped something that is NOT live
+            # (kanban t_69dcb49a). `live: false` used to still exit 0, so the cron
+            # lane reported success while the article page or its card/og art was
+            # 404. A skip/dry-run is not a failure.
+            if result.get("event") == "published" and result.get("live") is False:
+                print(
+                    "❌ publish reported live=false — "
+                    f"httpStatus={result.get('httpStatus')} "
+                    f"assetStatus={result.get('assetStatus')} "
+                    f"push={result.get('push')} ({result.get('pushDetail', '')})",
+                    file=sys.stderr,
+                )
+                return 1
             return 0
 
         # config/info
