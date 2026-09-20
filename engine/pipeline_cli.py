@@ -11,6 +11,14 @@ CLI (via engine/cli.py):
                                            # quarantine -> needs_review; never
                                            # publishes by itself)
   python -m engine.cli info                # show config (redacted)
+  python -m engine.cli gemini-smoke        # one live generateContent call with
+                                           # the .env GEMINI_API_KEY; exit 0 the
+                                           # key authenticates (200, or 429 =
+                                           # live but rate-limited), 1 rejected
+                                           # (401/403 -> rotate), 2 unset/other.
+                                           # [--key-file P] also fingerprints a
+                                           # candidate key file (never writes
+                                           # .env) — Gemini rotation verify step.
 
 State: appends one JSON line per run to engine/state/pipeline.jsonl
        (single writer: this module).
@@ -32,6 +40,7 @@ from seo.analyze import analyze_seo
 from writer.writer import draft_article
 from policy.publish import Decision, apply_policy, is_sensitive
 from publish import article_decision, is_quarantined, publish_one as _publish_one_runner
+from smoke import run_smoke as run_gemini_smoke
 from strapi import StrapiClient, StrapiError
 
 STATE_FILE = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
@@ -661,6 +670,19 @@ def main(argv: list[str] | None = None) -> int:
         if cmd == "info":
             print(json.dumps(redact(cfg), indent=2))
             return 0
+
+        # live Gemini key check (rotation runbook verify step, t_7e0fea29).
+        # Read-only: no Strapi client touched, no state file written — the
+        # finally below just closes the idle client.
+        if cmd == "gemini-smoke":
+            key_file = None
+            if "--key-file" in argv:
+                i = argv.index("--key-file")
+                if i + 1 >= len(argv):
+                    print("usage: python -m engine.cli gemini-smoke [--key-file <path>]", file=sys.stderr)
+                    return 2
+                key_file = argv[i + 1]
+            return run_gemini_smoke(config=cfg, key_file=key_file)
 
         print(f"unknown command: {cmd}", file=sys.stderr)
         return 2
