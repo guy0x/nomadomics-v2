@@ -24,7 +24,7 @@ import { CONTACT_EMAIL, CONTACT_MAILTO } from "@/lib/contact";
  * the same change.
  */
 
-const LAST_UPDATED = "19 September 2026";
+const LAST_UPDATED = "20 September 2026";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
