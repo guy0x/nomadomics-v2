@@ -1,8 +1,9 @@
 """Daily publish pipeline runner.
 
-Picks the highest-confidence in_review article, runs a focused final polish
-(TL;DR + internal links + meta tightening), generates card/OG cover art via
-Cake Nano, publishes to Strapi (status=published, publishedAt=now), commits
+Picks the highest-confidence in_review article (EXCLUDING quarantine-class
+articles — see the QUARANTINED_DECISIONS gate below), runs a focused final
+polish (TL;DR + internal links + meta tightening), generates card/OG cover art
+via Cake Nano, publishes to Strapi (status=published, publishedAt=now), commits
 the cover assets, and verifies the article renders on the live site.
 
 CLI entrypoint: `publish` command (registered in engine/pipeline_cli.py).
@@ -37,12 +38,32 @@ from llm import (
 from strapi import StrapiClient, StrapiError
 
 PUBLISH_STATE_FILE = Path(__file__).resolve().parent / "state" / "publish-pipeline.jsonl"
+DRAFT_JOURNAL = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
+RELEASE_APPROVALS = Path(__file__).resolve().parent / "state" / "release-approvals.jsonl"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PUBLIC_CARDS = REPO_ROOT / "frontend" / "public" / "cards"
 PUBLIC_OG = REPO_ROOT / "frontend" / "public" / "og"
 SNAPSHOT = REPO_ROOT / "frontend" / "scripts" / "published-slugs.json"
 CARD_W, CARD_H = 1200, 630
 MIN_CONFIDENCE = 75
+
+# Quarantine gate (2026-09-20, from finding t_cae3c2d2). The draft lane records
+# a policy decision per article; for sensitive topics (taxes/legal/medical/
+# visas/banking) that decision is QUARANTINE — "always human review, never
+# auto-published". The publish lane used to gate ONLY on status=in_review +
+# confidence, so a quarantined article was published on the next 13:00 run with
+# no human sign-off (proven live: crypto-taxes-for-digital-nomads published
+# 2026-09-19T10:06Z with decision=quarantine in engine/state/pipeline.jsonl).
+# The gate field is `topicDecision` on the Strapi article (engine/policy/
+# publish.py Decision value; "unknown" when the article predates the field or
+# was created before the draft lane started stamping it).
+#
+# A quarantined article is NOT an eligible auto-publish candidate, and if it is
+# somehow selected by an external path the runner REFUSES to publish it. The
+# ONLY release path is an explicit human action: Guy flips status to published
+# in Strapi admin (the engine token has update but no delete — quarantine not
+# destroy), or Guy moves the article out of the quarantine class entirely.
+QUARANTINED_DECISIONS = {"quarantine"}
 CAKE_BASE = "https://cake.nano-gpt.com/api/v1"
 CAKE_MODEL = "hidream"
 CAKE_SIZE = "1536x1024"
@@ -163,6 +184,151 @@ def list_in_review(client: StrapiClient, limit: int = 50) -> list[dict]:
         },
     )
     return data.get("data", [])
+
+
+def article_decision(article: dict) -> str:
+    """The article's recorded policy decision ('needs_review'/'quarantine'/...).
+
+    Read from the `topicDecision` field when present; falls back to `unknown`
+    (a missing field must never be treated as quarantine — it is the *absence*
+    of the recorded gate, which pre-dates the field, not a verdict).
+    """
+    d = article.get("topicDecision") or "unknown"
+    return str(d).strip().lower() or "unknown"
+
+
+def journal_quarantined_docids() -> set[str]:
+    """documentIds the DRAFT journal recorded as QUARANTINE.
+
+    Defense-in-depth layer (t_cae3c2d2): the draft lane appends one
+    `article_created` record per article to engine/state/pipeline.jsonl, carrying
+    the policy `decision`. Articles created before the `topicDecision` Strapi
+    field existed have no server-side gate marker, but their quarantine decision
+    IS in this journal — joining on documentId (not slug, which can differ via
+    _yearless_slug) closes that hole for legacy rows. Missing file -> empty set
+    (fail-open on the journal, but the Strapi topicDecision field still gates
+    new articles).
+    """
+    if not DRAFT_JOURNAL.exists():
+        return set()
+    out: set[str] = set()
+    for line in DRAFT_JOURNAL.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("event") != "article_created":
+            continue
+        if e.get("decision") == "quarantine" and e.get("articleDocumentId"):
+            out.add(str(e["articleDocumentId"]))
+    return out
+
+
+def release_approved_docids() -> set[str]:
+    """documentIds an operator EXPLICITLY approved for release (--release).
+
+    The explicit-human-release override ledger (t_cae3c2d2): `engine.cli
+    publish --release <slug>` appends one record per released documentId. A
+    documentId present here is exempt from the quarantine class, regardless of
+    what the Strapi field or the draft journal says — the human override is the
+    highest-authority signal. Single file, appended (never rewritten), ignored
+    if absent.
+    """
+    if not RELEASE_APPROVALS.exists():
+        return set()
+    out: set[str] = set()
+    for line in RELEASE_APPROVALS.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("articleDocumentId"):
+            out.add(str(e["articleDocumentId"]))
+    return out
+
+
+def record_release_approval(article: dict, *, source: str = "operator") -> bool:
+    """Persist an explicit human release of a quarantined article.
+
+    Called by the `--release` CLI path. Appends {ts, slug, articleDocumentId,
+    source} to RELEASE_APPROVALS. This is the durable record that a human
+    deliberately overrode the quarantine; it never publishes the article.
+    """
+    try:
+        RELEASE_APPROVALS.parent.mkdir(parents=True, exist_ok=True)
+        with RELEASE_APPROVALS.open("a") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "ts": _now_iso(),
+                        "slug": article.get("slug") or "",
+                        "articleDocumentId": article.get("documentId") or "",
+                        "source": source,
+                    }
+                )
+                + "\n"
+            )
+        return True
+    except OSError:
+        return False
+
+
+def is_quarantined(article: dict, journal: set[str] | None = None, approvals: set[str] | None = None) -> bool:
+    """True when the article is in the quarantine class.
+
+    Two independent signals, either of which marks quarantine:
+      1. the Strapi `topicDecision` field == quarantine (new articles), or
+      2. the draft journal's `article_created` record for this documentId
+         recorded decision==quarantine (legacy articles, joined by documentId).
+    An EXPLICIT human approval (article's documentId in `approvals`, recorded by
+    `engine.cli publish --release <slug>`) overrides both — release is the
+    highest-authority signal.
+
+    A missing topicDecision and a missing journal record ('unknown') is NOT
+    quarantined: pre-gate articles keep the old in_review+confidence behavior so
+    the daily lane is not starved by a schema change.
+    """
+    if approvals and article.get("documentId") in approvals:
+        return False
+    if article_decision(article) in QUARANTINED_DECISIONS:
+        return True
+    if journal and article.get("documentId") in journal:
+        return True
+    return False
+
+
+def _skip_reason(event: str, reason: str) -> dict:
+    return {"event": event, "reason": reason}
+
+
+def _hard_refuse_if_quarantined(
+    article: dict, journal: set[str] | None = None, approvals: set[str] | None = None
+) -> dict | None:
+    """Return a skip result (never publish) when `article` is quarantine-class.
+
+    Defense in depth: the candidate loop in publish_one already skips
+    quarantine-class articles, but a race/concurrent actor could flip a
+    legacy record's topicDecision to quarantine AFTER it was selected, or a
+    future code path could bypass the loop. If a quarantine article ever
+    reaches the publish step, this refuses it before any write, polish, or
+    cover generation — release is a human-only call (Strapi admin, or
+    `engine.cli publish --release <slug>`).
+    """
+    if is_quarantined(article, journal, approvals):
+        return {
+            "event": "skip",
+            "reason": (
+                f"refused to publish quarantined article {article.get('slug') or '?'} "
+                "(topicDecision=quarantine; release only via Strapi admin)"
+            ),
+        }
+    return None
 
 
 def list_published(client: StrapiClient, limit: int = 50) -> list[dict]:
@@ -542,10 +708,17 @@ def publish_one(
     skip_image: bool = False,
     no_commit: bool = False,
 ) -> dict:
-    """Publish the highest-confidence in_review article.
+    """Publish the highest-confidence eligible in_review article.
 
     Idempotent: refuses to (a) publish twice on the same UTC day, and (b)
     re-publish any slug that was ever published by this runner.
+
+    Quarantine gate (t_cae3c2d2): articles whose `topicDecision` is
+    `quarantine` are never eligible — the draft lane recorded them as
+    sensitive topics that require human review, so this runner skips them
+    (and refuses if one is ever selected by another path). Release of a
+    quarantined article is a human-only call via Strapi admin; see
+    `engine.cli publish --release <slug>` for the operator path.
     """
     published_all = _published_slugs()
     published_today = _published_slugs(today_only=True)
@@ -560,10 +733,23 @@ def publish_one(
     if not articles:
         return {"event": "skip", "reason": "no in_review articles"}
 
+    # Journal join (legacy protection): documentIds the draft journal recorded
+    # as QUARANTINE, loaded once per run so it never changes mid-loop. The
+    # release-approval ledger (explicit human overrides) is loaded alongside.
+    journal = journal_quarantined_docids()
+    approvals = release_approved_docids()
+
     winner: dict | None = None
     for a in articles:
         slug = a.get("slug")
         if not slug or slug in published_all:
+            continue
+        if is_quarantined(a, journal, approvals):
+            # Quarantine gate (t_cae3c2d2): a topic the draft lane recorded as
+            # QUARANTINE must never be auto-published, even at high confidence.
+            # It is skipped like any other ineligible candidate. The OTHER
+            # in_review articles are still scanned, so a quarantined
+            # high-confidence article does not block the daily lane.
             continue
         if int(a.get("confidence") or 0) >= MIN_CONFIDENCE:
             winner = a
@@ -571,11 +757,13 @@ def publish_one(
 
     if winner is None:
         top = articles[0] if articles else {}
+        quarantined = [str(a.get("slug")) for a in articles if is_quarantined(a, journal, approvals)]
+        suffix = f" · quarantined (skipped): {', '.join(quarantined)}" if quarantined else ""
         return {
             "event": "skip",
             "reason": (
                 f"no eligible in_review article >= {MIN_CONFIDENCE} confidence "
-                f"(top available: {top.get('slug')}={top.get('confidence')})"
+                f"(top available: {top.get('slug')}={top.get('confidence')}){suffix}"
             ),
         }
 
@@ -585,6 +773,14 @@ def publish_one(
     primary_kw: str = winner.get("focusKeyword") or ""
     if not slug or not doc_id:
         return {"event": "skip", "reason": f"article missing slug/docId: {slug}"}
+
+    # Hard refuse (defense in depth): even if a quarantine-class article is
+    # somehow selected here (legacy record with a missing topicDecision that a
+    # concurrent actor flips to quarantine, a future code path, a manual
+    # invocation), the runner must NOT ship it — release is a human-only call.
+    refused = _hard_refuse_if_quarantined(winner, journal, approvals)
+    if refused is not None:
+        return refused
 
     original_md = winner.get("bodyMarkdown") or ""
 

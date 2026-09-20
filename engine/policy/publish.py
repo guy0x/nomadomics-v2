@@ -7,8 +7,25 @@ Trust ladder (defaults, configurable in Config):
   L0  manual override         -> always needs_review (Guy signs off every draft)
   L1  auto-publish >=80, after first-N human reviews      [MVP launch default]
       60-79 -> needs_review, <60 -> reject
-  Sensitive topics (tax/legal/medical) are ALWAYS quarantined to human review,
-  regardless of score — per SOUL §8 trust (never auto-publish those).
+  Sensitive topics (tax/legal/medical/visas/banking) are ALWAYS quarantined to
+  human review, regardless of score — per SOUL §8 trust (never auto-publish
+  those).
+
+Quarantine enforcement (2026-09-20, t_cae3c2d2): the decision is stamped onto
+the Strapi article as `topicDecision` by the draft lane, and the publish lane
+(engine/publish.py) REFUSES to auto-publish anything with
+topicDecision=quarantine — the 13:00 runner skips it and hard-refuses if one is
+ever selected by another path. Legacy articles (created before the field) are
+also gated on the draft journal `engine/state/pipeline.jsonl`, joined by
+documentId. An explicit human approval recorded in
+`engine/state/release-approvals.jsonl` overrides the quarantine class (the
+highest-authority signal). Release is a HUMAN-ONLY call:
+  1. Guy edits the article in Strapi admin and flips status to `published`, OR
+  2. an operator runs `engine.cli publish --release <slug>` (an EXPLICIT
+     approval that moves topicDecision quarantine -> needs_review AND records
+     the approval ledger; the article then becomes eligible like any other
+     in_review article — still gated by the 75-confidence/13:00 lane, never
+     shipped by the release command itself).
 """
 
 from __future__ import annotations

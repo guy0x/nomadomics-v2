@@ -49,7 +49,15 @@ class FakeStrapi:
         self.published = []
 
     def get_topic_by_slug(self, slug):
-        return self.topic if self.topic["attributes"]["slug"] == slug else None
+        # Real Strapi v5 returns fields flat at the top level; _attrs() reads
+        # the doc itself, so return a flat-merged shape (not the nested
+        # attributes wrapper) — otherwise category never reaches is_sensitive
+        # and the quarantine path is never exercised.
+        if self.topic["attributes"]["slug"] != slug:
+            return None
+        merged = dict(self.topic["attributes"])
+        merged["documentId"] = self.topic["documentId"]
+        return merged
 
     def update_topic(self, doc_id, fields):
         self.topic_updates.append((doc_id, fields))
@@ -153,6 +161,10 @@ def test_draft_one_chains_stages_and_writes_article(monkeypatch):
     article_statuses = [s[1].get("status") for s in client.published]
     assert "published" not in article_statuses
     assert article_statuses  # an in_review/rejected status was set
+    # The policy decision is stamped on the article so the publish lane can
+    # enforce the quarantine gate (t_cae3c2d2).
+    decisions = [s[1].get("topicDecision") for s in client.published]
+    assert decisions and "quarantine" in decisions
 
 
 def _make_high_conf_draft():

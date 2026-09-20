@@ -91,6 +91,19 @@ One polished article/day auto-publishes with cover art.
 - Idempotency/state: `engine/state/publish-pipeline.jsonl` (gitignored, like
   all of `engine/state/`) — max 1 publish per UTC day, never re-publishes a
   slug. No eligible article ⇒ skip notice, no publish.
+- **Quarantine gate (2026-09-20):** the draft lane stamps each article's policy
+  decision as `topicDecision` on the Strapi article. The publish lane REFUSES
+  any article with `topicDecision=quarantine` — it is skipped (and hard-refused
+  if ever selected by another path), so YMYL tax/legal content can no longer
+  auto-publish at the 13:00 run. **Release is human-only:** (1) Guy flips
+  status to `published` in Strapi admin, or (2) an operator runs
+  `env -u PYTHONPATH .venv/bin/python -m engine.cli publish --release <slug>`
+  (explicit approval: `topicDecision` quarantine → needs_review, plus a durable
+  approval record in `engine/state/release-approvals.jsonl` — the article
+  then competes in the normal in_review lane; the release command never
+  publishes by itself). Legacy articles created before the field also gate on
+  the draft journal (`engine/state/pipeline.jsonl`, joined by documentId) so
+  quarantined tax/legal content is protected even without the server-side field.
 - Cover integrity: `node frontend/scripts/check-images.mjs` (snapshot:
   `frontend/scripts/published-slugs.json` — the runner does NOT update it;
   refresh it when publishing outside the runner).

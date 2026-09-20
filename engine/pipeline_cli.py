@@ -5,6 +5,11 @@ CLI (via engine/cli.py):
   python -m engine.cli draft-one <slug>    # run full pipeline on one topic
   python -m engine.cli run-batch [N]       # process up to N pending topics (N >= 1)
   python -m engine.cli drafts              # list drafts in Strapi
+  python -m engine.cli publish [--dry-run] # daily publish lane (skips quarantined)
+  python -m engine.cli publish --release <slug>  # explicit human release of a
+                                           # quarantined article (topicDecision
+                                           # quarantine -> needs_review; never
+                                           # publishes by itself)
   python -m engine.cli info                # show config (redacted)
 
 State: appends one JSON line per run to engine/state/pipeline.jsonl
@@ -26,7 +31,7 @@ from research.research import research_topic, validate_research
 from seo.analyze import analyze_seo
 from writer.writer import draft_article
 from policy.publish import Decision, apply_policy, is_sensitive
-from publish import publish_one as _publish_one_runner
+from publish import article_decision, is_quarantined, publish_one as _publish_one_runner
 from strapi import StrapiClient, StrapiError
 
 STATE_FILE = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
@@ -342,18 +347,34 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     # explicit AUTO_PUBLISH_ENABLED env flag. While the flag is off (default),
     # the v1 human gate holds and every article lands in_review. Sensitive topics
     # are structurally quarantined by the policy (QUARANTINE -> never published).
+    # The policy decision is ALSO stamped onto the article (`topicDecision`,
+    # 2026-09-20, t_cae3c2d2) so the publish lane can enforce the quarantine
+    # gate instead of trusting the article's status alone.
     published = False
     topic_status = "in_review"
     if cfg.auto_publish_enabled and decision.decision == Decision.AUTO_PUBLISH:
-        client.update_article(article_id, {"status": "published", "publishedAt": _now_iso()})
+        client.update_article(
+            article_id,
+            {
+                "status": "published",
+                "publishedAt": _now_iso(),
+                "topicDecision": decision.decision.value,
+            },
+        )
         topic_status = "published"
         published = True
     elif decision.decision == Decision.REJECT:
         topic_status = "failed"
-        client.update_article(article_id, {"status": "rejected"})
+        client.update_article(
+            article_id,
+            {"status": "rejected", "topicDecision": decision.decision.value},
+        )
     else:
         # QUARANTINE (sensitive) and NEEDS_REVIEW both land in_review for Guy.
-        client.update_article(article_id, {"status": "in_review"})
+        client.update_article(
+            article_id,
+            {"status": "in_review", "topicDecision": decision.decision.value},
+        )
     client.update_topic(topic["documentId"], {"status": topic_status})
 
     _append_state(
@@ -521,6 +542,94 @@ def main(argv: list[str] | None = None) -> int:
             dry_run = "--dry-run" in argv
             skip_image = "--skip-image" in argv
             no_commit = "--no-commit" in argv
+            # Explicit human release path for a quarantined article (t_cae3c2d2).
+            # The daily lane refuses quarantine-class articles; an operator can
+            # still ship one deliberately after Guy's sign-off by moving it out
+            # of the quarantine class first. `--release <slug>` is that explicit
+            # action: it marks the article approved-for-release (topicDecision
+            # -> needs_review) and the article becomes eligible again — but only
+            # if Guy (or the human operator) already moved status to in_review.
+            # It is a WRITE; it never publishes by itself.
+            release_slug = None
+            if "--release" in argv:
+                i = argv.index("--release")
+                if i + 1 >= len(argv):
+                    print(
+                        "usage: python -m engine.cli publish --release <slug> [--dry-run]",
+                        file=sys.stderr,
+                    )
+                    return 2
+                release_slug = argv[i + 1]
+            if release_slug:
+                if not release_slug or release_slug.startswith("-"):
+                    print(
+                        "usage: python -m engine.cli publish --release <slug>",
+                        file=sys.stderr,
+                    )
+                    return 2
+                try:
+                    topic = client.get_topic_by_slug(release_slug)
+                except StrapiError as e:
+                    print(f"release: Strapi error while looking up topic {release_slug}: {e}", file=sys.stderr)
+                    return 1
+                articles = client._request(
+                    "GET",
+                    "/api/articles",
+                    params={
+                        "filters[slug][$eq]": release_slug,
+                        "pagination[pageSize]": 1,
+                    },
+                ).get("data", [])
+                if not articles:
+                    print(
+                        f"release: no article with slug '{release_slug}' — nothing to approve",
+                        file=sys.stderr,
+                    )
+                    return 1
+                article = articles[0]
+                doc_id = article.get("documentId")
+                if not doc_id:
+                    print("release: article has no documentId", file=sys.stderr)
+                    return 1
+                decision = article_decision(article)
+                print(
+                    f"release: {release_slug} — topic status: "
+                    f"{(topic or {}).get('status') or '?'}, article decision: {decision}, "
+                    f"article status: {article.get('status') or '?'}",
+                )
+                # A legacy article may be quarantine-class even when the server
+                # field is absent ('unknown') — the draft journal's record is
+                # authoritative for pre-topicDecision rows. Release must use the
+                # SAME gate the publish lane uses (field OR journal), else a
+                # journal-only quarantine can never be unblocked.
+                from publish import is_quarantined, journal_quarantined_docids, record_release_approval
+
+                journal = journal_quarantined_docids()
+                if is_quarantined(article, journal):
+                    # Explicit human release: flip the server-side field (when the
+                    # field carries quarantine) AND write the durable approval
+                    # ledger so the publish lane treats this article as released
+                    # regardless of the draft journal (legacy rows have no field
+                    # to flip).
+                    if decision == "quarantine":
+                        client.update_article(doc_id, {"topicDecision": "needs_review"})
+                    recorded = record_release_approval(article, source="cli-release")
+                    print(
+                        f"release: {release_slug} approved for release — topicDecision "
+                        f"{decision if decision != 'unknown' else '(no field, journal-only)'} "
+                        f"{'quarantine -> needs_review' if decision == 'quarantine' else 'released via journal join'}, "
+                        "approval ledger "
+                        f"{'recorded' if recorded else 'NOT recorded (will block on journal join)'} "
+                        "(still not published; flip status to in_review/published in "
+                        "Strapi admin or run publish --dry-run to confirm eligibility)"
+                    )
+                else:
+                    print(
+                        f"release: {release_slug} is not quarantined (decision={decision}) — "
+                        "nothing to do"
+                    )
+                return 0
+
             result = _publish_one_runner(
                 client, cfg,
                 dry_run=dry_run,

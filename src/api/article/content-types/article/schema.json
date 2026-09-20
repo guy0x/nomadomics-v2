@@ -66,6 +66,12 @@
       "enum": ["draft", "in_review", "published", "rejected"],
       "default": "draft"
     },
+    "topicDecision": {
+      "type": "enumeration",
+      "enum": ["needs_review", "quarantine", "auto_publish", "reject", "unknown"],
+      "default": "unknown",
+      "description": "Recorded policy decision from the draft lane (engine/policy/publish.py). The publish lane refuses to auto-publish articles whose topicDecision is 'quarantine' — a quarantined article ships ONLY through explicit human action (Guy flips status to published in Strapi admin)."
+    },
     "scheduledFor": {
       "type": "datetime"
     },
