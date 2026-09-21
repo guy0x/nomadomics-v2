@@ -52,6 +52,46 @@ STATE_FILE = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
 # instead of a kill.
 TOPIC_BUDGET_SECONDS = 900.0
 
+def _ship_cover_art(client, slug: str, title: str) -> str:
+    """Generate + ship cover art for an article published by THIS lane.
+
+    The 13:00 publish lane (publish.publish_one) generates art on every
+    publish; this lane bypassed it, so AUTO_PUBLISH articles went live with
+    no covers at all (2026-09-21, t_2c07d324). Reuses publish.py's own
+    helpers verbatim and mirrors publish_one()'s sequence: generate,
+    refresh the image gate's slug snapshot, commit art+snapshot together,
+    push to origin (the deploy trigger).
+
+    Non-fatal by convention (art must never fail an already-published
+    article): returns "generated" | "push_failed" | "failed", and the
+    caller journals it on the article_created row so a later monitoring
+    failure is always explainable from state.
+    """
+    try:
+        from publish import (
+            commit_assets,
+            generate_cover,
+            list_published,
+            push_assets,
+            write_slug_snapshot,
+        )
+
+        print(f"  generating cover for {slug}…")
+        if not generate_cover(slug, title):
+            return "failed"
+        # Same commit shape as publish_one(): art staged in the same commit
+        # as a fresh gate snapshot, so the image gate's universe never drifts.
+        write_slug_snapshot([a.get("slug") for a in list_published(client, limit=200)])
+        if not commit_assets(slug):
+            return "failed"
+        push_ok, push_detail = push_assets()
+        print(f"  push: {push_detail}")
+        return "generated" if push_ok else "push_failed"
+    except Exception as e:
+        print(f"  !! cover shipping failed (non-fatal): {e}", file=sys.stderr)
+        return "failed"
+
+
 # --- Stale in-flight reclaim (2026-09-18) ------------------------------------
 # A topic whose run is killed mid-flight (cron tree-kill at the 3600s cap, a tool
 # timeout, an OOM) is left in one of these statuses. list_pending_topics() only
@@ -366,6 +406,9 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     # gate instead of trusting the article's status alone.
     published = False
     topic_status = "in_review"
+    # Art status for the journal (t_2c07d324): only the AUTO_PUBLISH branch
+    # ships art, so every other path records "skipped".
+    cover_status = "skipped"
     if cfg.auto_publish_enabled and decision.decision == Decision.AUTO_PUBLISH:
         client.update_article(
             article_id,
@@ -377,6 +420,9 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
         )
         topic_status = "published"
         published = True
+        # Ship art with the article (t_2c07d324): this lane publishes without
+        # the 13:00 runner, which is the only other place covers are made.
+        cover_status = _ship_cover_art(client, slug, topic["title"])
     elif decision.decision == Decision.REJECT:
         topic_status = "failed"
         client.update_article(
@@ -402,6 +448,9 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
             "confidence": seo.confidence,
             "decision": decision.decision.value,
             "published": published,
+            # t_2c07d324: art status for lane-B publishes ("generated" |
+            # "push_failed" | "failed"; absent = not auto-published).
+            "cover": cover_status,
             "voiceScore": seo.voice_score,
             "factualScore": seo.factual_score,
             "edit_report": (edited.edit_report if edited else ""),

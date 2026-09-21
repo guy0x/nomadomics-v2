@@ -205,6 +205,15 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
     from editor.editor import EditedDraft
     from seo.analyze import SEOReport
 
+    calls = {"cover": 0, "snapshot": 0, "commit": 0, "push": 0}
+
+    def fake_ship(_client, slug, title):
+        calls["cover"] += 1
+        assert slug == "esim-plans" and title
+        return "generated"
+
+    monkeypatch.setattr(pipeline_cli, "_ship_cover_art", fake_ship)
+
     monkeypatch.setattr(
         pipeline_cli, "research_topic",
         lambda topic, kw, config=None, **k: ResearchResult(
@@ -245,6 +254,14 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
     assert "published" in article_statuses
     # topic marked published
     assert client.topic_updates[-1][1].get("status") == "published"
+
+    # t_2c07d324: auto-publish must ship cover art with the article —
+    # exactly once, and journaled on the article_created row so the trial
+    # monitor can always explain a later art failure from state.
+    assert calls["cover"] == 1
+    rows = [json.loads(line) for line in pipeline_cli.STATE_FILE.read_text().splitlines() if line.strip()]
+    created = [r for r in rows if r["event"] == "article_created"]
+    assert created and created[-1].get("cover") == "generated"
 
 
 def test_draft_one_never_autopublishes_when_flag_off(monkeypatch):
