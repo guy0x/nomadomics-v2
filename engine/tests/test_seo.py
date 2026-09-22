@@ -73,6 +73,39 @@ def test_good_draft_has_meta_and_excerpt():
     assert report.excerpt
 
 
+def test_long_opener_draft_keeps_meta_and_excerpt():
+    """The excerpt must survive an opener that alone fills the 155c budget.
+
+    `test_good_draft_has_meta_and_excerpt` opens with a 40c sentence, so it never
+    reaches the boundary. On 2026-09-22 a house-voice article (226c opener)
+    published with `excerpt=""` — an empty card, no hero subtitle, empty RSS
+    description — and tripped the autopost content invariant, while this file
+    stayed green. Contract + monitor parity: tests/test_excerpt_invariant.py.
+    """
+    opener = (
+        "Picture this: it is a Tuesday morning in Lisbon, the coworking space is "
+        "still empty, and you have just opened a letter from the tax office that "
+        "says you owe money in two countries at once, which is exactly the moment "
+        "most digital nomads start looking for help."
+    )
+    assert len(opener) > 155
+    body = (
+        "# Best eSIM Travel Plans for Budget Nomads in 2026\n\n"
+        f"{opener}\n\n"
+        "An eSIM fixes the cost side of that problem.\n\n"
+        "## Airalo\nAiralo covers 200+ countries.\n"
+    )
+    draft = ArticleDraft(markdown=body, word_count=len(body.split()))
+    draft.used_facts = [f.claim for f in make_research().facts]
+
+    report = analyze_seo(draft, "eSIM travel", research=make_research())
+    assert report.excerpt
+    assert len(report.excerpt) <= 220            # the monitor's card-length rule
+    assert report.excerpt.endswith(("…", ".", "!", "?"))
+    assert report.meta_description.endswith(".")
+    assert not report.meta_description.endswith("…")   # sibling rule: no trailing ellipsis
+
+
 def test_poor_draft_flagged_with_fixes():
     report = analyze_seo(make_hard_draft(), "eSIM travel", research=make_research())
     assert report.seo_score < 70
