@@ -227,6 +227,8 @@ def analyze_seo(
 def _first_sentence(md: str) -> str:
     text = re.sub(r"^#.*$", "", md, flags=re.M).strip()
     text = re.sub(r"[#*`>]", "", text)
+    if not text:
+        return ""
     # first 1-2 sentences up to ~160 chars
     m = re.split(r"(?<=[.!?])\s+", text.replace("\n", " "))
     out = ""
@@ -234,7 +236,16 @@ def _first_sentence(md: str) -> str:
         if len(out) + len(s) > 155:
             break
         out += (s + " ")
-    return out.strip()
+    out = out.strip()
+    if not out:
+        # The opener alone fills the budget (house-voice scene-setters run 180c+):
+        # cut it on a word boundary instead of returning "". An empty excerpt
+        # leaves the card / hero / RSS description blank and trips the content
+        # invariant, so this branch must always produce a sentence-shaped string.
+        head = text.replace("\n", " ").strip()
+        cut = head[:155].rsplit(" ", 1)[0].rstrip(" ,;:")
+        out = (cut or head[:154]).rstrip() + "\u2026"
+    return out
 
 
 def _make_meta_title(prim: str, title_line: str) -> str:
@@ -247,6 +258,10 @@ def _make_meta_title(prim: str, title_line: str) -> str:
 
 def _make_meta_desc(body: str, prim: str) -> str:
     s = _first_sentence(body)
+    if s.endswith("\u2026"):
+        # Truncated opener: the metaDescription invariant rejects a trailing
+        # ellipsis, so present the cut as the complete sentence it acts as.
+        s = s[:-1].rstrip(" ,;:") + "."
     if len(s) < 140 and prim:
         s = f"{s} Learn how to save money on {prim}."
     if len(s) > 160:
