@@ -45,6 +45,46 @@ Run tests:
 cd ~/nomadomics-v2/engine && env -u PYTHONPATH ../.venv/bin/python -m pytest tests/ -q
 ```
 
+## Draft vs published layer — article writes (t_60ad2c8e, 2026-09-22)
+
+`api::article.article` has `draftAndPublish: true`, which means every article has TWO
+rows in Postgres (`articles`, keyed by `document_id`; `published_at` NULL = draft).
+
+- A `PUT /api/articles/<documentId>` **with no `?status=`** writes THROUGH to the
+  **published layer** and re-stamps `publishedAt`. On 2026-09-22 that shipped an
+  edited body to the live site (documentId `su1sx6rek6wnz7yfaayna7qh`) inside the
+  frontend's 300s ISR window, with no human gate.
+- `?status=draft` → draft layer only; `?status=published` → the publish step
+  (it also re-syncs the draft layer).
+
+Therefore `StrapiClient.update_article(...)` takes an explicit `status` and
+**defaults to `"draft"`** — never publish by accident. Only two call sites pass
+`status="published"`, and they ARE the publish steps: the auto-publish branch in
+`pipeline_cli.draft_one` and `publish.publish_one`. Everything else (quarantine /
+in_review flips, the `publish --release` topicDecision flip, dev scripts) passes
+`"draft"`. `status=None` omits the param and is the historical dangerous
+behaviour — don't use it to edit a draft.
+
+**`publishedAt` is not restorable from a payload.** On v5 the document service
+owns that column and ignores the value you send, so a timestamp mangled by an
+accidental republish cannot be set back by including `publishedAt` in `fields`.
+Change publish state only via `status="published"`.
+
+Regression coverage: `engine/tests/test_article_write_layer.py`. The live test
+writes to the local Strapi and is opt-in:
+
+```
+cd ~/nomadomics-v2/engine && env -u PYTHONPATH NOMADOMICS_STRAPI_LIVE_TEST=1 \
+  ../.venv/bin/python -m pytest tests/test_article_write_layer.py -q
+```
+
+It creates its own fixture article (custom `status` enum stays `draft`, so the
+frontend never serves it), publishes the fixture's own published layer, asserts a
+default write leaves that layer byte-identical, then removes the fixture. The
+`engine-write` token is least-privilege (find/findOne/create/update, **no
+delete**), so cleanup drops the rows at the DB level via `psql` + the repo's
+`DATABASE_*` values; without those the test skips instead of leaking rows.
+
 ## Gemini content pipeline (2026-08-29)
 
 Research → draft → edit all run on **Gemini 2.5 Flash** (primary) via the
@@ -54,9 +94,14 @@ Key: `GEMINI_API_KEY` in the gitignored `.env` (never logged).
 - Stage map: `engine/research/` → `engine/writer/` → `engine/editor/` → `engine/seo/analyze.py`
   (deterministic scorer incl. a **structure score**: tables/bullets/H3/pros-cons feed
   `seo_score`, so walls of prose score lower than structured drafts).
-- Publish kill-switch: `AUTO_PUBLISH_ENABLED` in `.env` (default **false**). While false,
-  every draft lands `in_review` for Guy. When Guy flips it true, non-sensitive topics with
-  confidence ≥ 80 auto-publish; taxes/legal/medical/visas/banking always quarantine to review.
+<!-- canon:volatile:start -->
+- Publish gate (ratified E, 2026-09-23): auto-publish under invariants, veto in the daily digest.
+  The engine publishes a non-sensitive article when policy confidence clears and the write-time
+  invariants pass (non-empty excerpt and meta, yearless slug, at least two real citations).
+  Guy can retract from the daily digest. Taxes/legal/medical/visas/banking stay quarantined.
+  `publish_gate=auto-publish-under-invariants` · `veto=daily-digest` · cron_total is in
+  `~/.hermes/docs/generated-canon.txt` (129 on 2026-09-23), not in this paragraph.
+<!-- canon:volatile:end -->
 - Structure contract lives in the writer + editor prompts (bullets under every H3,
   comparison tables, Pros/Cons, Bottom Line, FAQ) — output renders via the frontend's
   react-markdown GFM renderer.

@@ -36,7 +36,7 @@ class FakeClient:
             return {"data": [a for a in self.articles if a.get("status") == "published"]}
         return {"data": []}
 
-    def update_article(self, doc_id, fields):
+    def update_article(self, doc_id, fields, *, status="draft"):
         self.updates.append((doc_id, fields))
 
     def close(self):
@@ -57,7 +57,17 @@ def make_article(
         "title": title,
         "confidence": confidence,
         "status": status,
-        "bodyMarkdown": "# Title\n\nBody content here.\n\n## Section\nSome text.\n",
+        "bodyMarkdown": (
+            "# Title\n\nBody content here.\n\n## Section\nSome text.\n"
+            "https://irs.gov/one\nhttps://irs.gov/two\n"
+        ),
+        "excerpt": "A short excerpt for the card.",
+        "metaTitle": "Tax Article",
+        "metaDescription": (
+            "Living costs, visa rules and internet speeds differ in every hub. "
+            "This guide compares the practical numbers so you can pick a base "
+            "before you book a flight."
+        ),
         "focusKeyword": "taxes",
     }
     if decision is not None:
@@ -68,6 +78,7 @@ def make_article(
 @pytest.fixture(autouse=True)
 def _isolate_state(monkeypatch, tmp_path):
     monkeypatch.setattr(publish, "PUBLISH_STATE_FILE", tmp_path / "publish-pipeline.jsonl")
+    monkeypatch.setattr(publish, "SHARED_LEDGER", tmp_path / "publish-ledger.jsonl")
     monkeypatch.setattr(publish, "DRAFT_JOURNAL", tmp_path / "pipeline.jsonl")
     monkeypatch.setattr(publish, "RELEASE_APPROVALS", tmp_path / "release-approvals.jsonl")
     monkeypatch.setattr(publish, "SNAPSHOT", tmp_path / "published-slugs.json")
@@ -115,9 +126,11 @@ def test_quarantined_high_confidence_article_is_skipped(monkeypatch):
 def test_quarantined_does_not_block_other_eligible_article(monkeypatch, tmp_path):
     """A quarantined high-confidence article is skipped, a healthy one wins."""
     monkeypatch.setattr(publish, "_published_slugs", lambda *a, **k: set())
+    # Distinct documentIds: the lane dedupes candidates by documentId (kanban
+    # t_e7d03242), so two articles sharing one doc id are one document.
     client = FakeClient([
-        make_article(slug="quar-tax", decision="quarantine", confidence=99),
-        make_article(slug="healthy-travel", decision="needs_review", confidence=88),
+        make_article(slug="quar-tax", decision="quarantine", confidence=99, doc_id="doc-quar"),
+        make_article(slug="healthy-travel", decision="needs_review", confidence=88, doc_id="doc-healthy"),
     ])
 
     result = publish.publish_one(client, None, dry_run=True)  # type: ignore[arg-type]
@@ -318,3 +331,88 @@ def test_cli_release_journal_only_quarantine(tmp_path, monkeypatch, capsys, mock
     lines = (tmp_path / "release-approvals.jsonl").read_text().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["articleDocumentId"] == "leg-doc"
+
+
+# --- release-time cover-art warning (kanban t_e8a369fc, 2026-09-23) ----------
+#
+# `release` never publishes: the operator does, and a hand-made Strapi write
+# bypasses both lanes that generate cover art (the 13:00 runner's publish_one
+# and the draft lane's AUTO_PUBLISH branch). Two releases shipped that way on
+# 2026-09-23 went live with `/og/<slug>.png` 404ing. The release approval is the
+# last engine-run step before the article ships, so it warns while the operator
+# can still fix it. These tests pin that the warning fires exactly when the art
+# is absent, and never on art that is already there.
+
+
+def _release_cli(monkeypatch, slug: str):
+    """Run `publish --release <slug>` against a quarantined stub article."""
+    from engine import pipeline_cli as cli
+
+    article = {
+        "documentId": "art-doc",
+        "slug": slug,
+        "title": "Some Article",
+        "status": "in_review",
+        "confidence": 88,
+        "topicDecision": "quarantine",
+    }
+
+    class DummyClient:
+        def get_topic_by_slug(self, slug):
+            return {"attributes": {"slug": slug, "status": "in_review"}}
+
+        def _request(self, method, path, params=None, **kw):
+            return {"data": [article]}
+
+        def update_article(self, doc_id, data, **kw):
+            return {"data": {"documentId": doc_id}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "StrapiClient", lambda cfg: DummyClient())
+    return cli.main(["publish", "--release", slug])
+
+
+def test_release_warns_when_cover_art_missing(tmp_path, monkeypatch, capsys):
+    jp = _write_journal(tmp_path, [("art-doc", "quarantine", "no-art-slug")])
+    monkeypatch.setattr(publish, "DRAFT_JOURNAL", jp)
+
+    rc = _release_cli(monkeypatch, "no-art-slug")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "approved for release" in out
+    assert "cover art MISSING for no-art-slug" in out
+    # The warning must name both absent files and the fix.
+    assert "no-art-slug.png" in out
+    assert "nomadomics_backfill_covers.py" in out
+
+
+def test_release_silent_when_cover_art_present(tmp_path, monkeypatch, capsys):
+    jp = _write_journal(tmp_path, [("art-doc", "quarantine", "has-art-slug")])
+    monkeypatch.setattr(publish, "DRAFT_JOURNAL", jp)
+    for d in (publish.PUBLIC_CARDS, publish.PUBLIC_OG):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "has-art-slug.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    rc = _release_cli(monkeypatch, "has-art-slug")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "approved for release" in out
+    assert "cover art MISSING" not in out
+
+
+def test_release_warns_when_only_one_of_the_two_variants_exists(
+    tmp_path, monkeypatch, capsys
+):
+    """cards/ present, og/ absent is still a 404 og:image — must warn."""
+    jp = _write_journal(tmp_path, [("art-doc", "quarantine", "half-art-slug")])
+    monkeypatch.setattr(publish, "DRAFT_JOURNAL", jp)
+    publish.PUBLIC_CARDS.mkdir(parents=True, exist_ok=True)
+    (publish.PUBLIC_CARDS / "half-art-slug.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    rc = _release_cli(monkeypatch, "half-art-slug")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "cover art MISSING for half-art-slug" in out
+    assert "half-art-slug.png" in out

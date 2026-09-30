@@ -39,7 +39,7 @@ def test_stage_chain_gemini_primary_then_openrouter_fallback():
     chain = stage_chain(cfg, "research")
     assert chain[0] == ("gemini", "gemini-2.5-flash")
     # OpenRouter primary :free model + fallbacks follow, no duplicates
-    assert ("openrouter", "google/gemma-4-26b-a4b-it:free") in chain
+    assert ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free") in chain
     providers = [p for p, _ in chain]
     assert providers[0] == "gemini"
     # de-duplicated

@@ -67,8 +67,10 @@ class FakeStrapi:
         self.articles.append(doc)
         return {"data": doc}
 
-    def update_article(self, doc_id, fields):
-        self.published.append((doc_id, fields))
+    def update_article(self, doc_id, fields, *, status="draft"):
+        # status records WHICH layer the write targeted (t_60ad2c8e): "draft"
+        # for every non-publish path, "published" only for the publish step.
+        self.published.append((doc_id, fields, status))
 
     def count_published(self):
         return 0
@@ -165,6 +167,10 @@ def test_draft_one_chains_stages_and_writes_article(monkeypatch):
     # enforce the quarantine gate (t_cae3c2d2).
     decisions = [s[1].get("topicDecision") for s in client.published]
     assert decisions and "quarantine" in decisions
+    # Layer discipline (t_60ad2c8e): a quarantine/in_review flip targets the
+    # DRAFT layer. A bare PUT would write through to the published layer and
+    # ship the article live with no human gate.
+    assert {s[2] for s in client.published} == {"draft"}
 
 
 def _make_high_conf_draft():
@@ -189,7 +195,7 @@ def _make_high_conf_draft():
     return body
 
 
-def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch):
+def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch, tmp_path):
     client = FakeStrapi()
     client.topic["attributes"].update({"slug": "esim-plans", "category": "gear", "primaryKeyword": "eSIM travel"})
     cfg = make_cfg()
@@ -220,12 +226,13 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
             topic=topic,
             facts=[
                 Fact(claim="Airalo covers 200+ countries.", source_url="https://airalo.com"),
-                Fact(claim="Roaming costs $50+ per trip.", source_url="https://example.com/r"),
+                Fact(claim="Roaming costs $50+ per trip.", source_url="https://www.fcc.gov/roaming"),
                 Fact(claim="eSIM cuts roaming cost by 80%.", source_url="https://example.com/e"),
             ],
         ),
     )
     monkeypatch.setattr(pipeline_cli, "validate_research", lambda r, min_facts=3: (True, [], []))
+    monkeypatch.setattr(pipeline_cli, "PUBLISH_LEDGER", tmp_path / "publish-ledger.jsonl")
     body = _make_high_conf_draft()
     monkeypatch.setattr(
         pipeline_cli, "draft_article",
@@ -243,7 +250,13 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
     monkeypatch.setattr(
         pipeline_cli, "analyze_seo",
         lambda draft, pk, secondary_keywords=None, research=None: SEOReport(
-            seo_score=85, confidence=90, meta_title="X", meta_description="Y", excerpt="Z",
+            seo_score=85, confidence=90, meta_title="X",
+            meta_description=(
+                "Living costs, visa rules and internet speeds differ in every hub. "
+                "This guide compares the practical numbers so you can pick a base "
+                "before you book a flight."
+            ),
+            excerpt="Z",
         ),
     )
 
@@ -252,6 +265,10 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
     assert result["published"] is True
     article_statuses = [s[1].get("status") for s in client.published]
     assert "published" in article_statuses
+    # The auto-publish branch IS a publish: it is the one path allowed to write
+    # the published layer (t_60ad2c8e).
+    assert client.published[-1][2] == "published"
+    assert all(s[2] in ("draft", "published") for s in client.published)
     # topic marked published
     assert client.topic_updates[-1][1].get("status") == "published"
 
@@ -264,12 +281,20 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
     assert created and created[-1].get("cover") == "generated"
 
 
-def test_draft_one_never_autopublishes_when_flag_off(monkeypatch):
+def test_draft_one_autopublishes_under_invariants_when_flag_off(monkeypatch, tmp_path):
+    """Ratified E: the env flag is not the gate. Invariants are."""
     client = FakeStrapi()
     client.topic["attributes"].update({"slug": "esim-plans", "category": "gear", "primaryKeyword": "eSIM travel"})
-    cfg = make_cfg()  # auto_publish_enabled defaults False
+    cfg = Config(
+        strapi_url="http://localhost:1337",
+        strapi_engine_token="tok",
+        openrouter_api_key="key",
+        auto_publish_enabled=False,
+        first_n_human_review=0,
+    )
 
     import pipeline_cli
+    monkeypatch.setattr(pipeline_cli, "_ship_cover_art", lambda *a, **k: "generated")
     from research.research import Fact, ResearchResult
     from writer.writer import ArticleDraft
     from editor.editor import EditedDraft
@@ -281,12 +306,13 @@ def test_draft_one_never_autopublishes_when_flag_off(monkeypatch):
             topic=topic,
             facts=[
                 Fact(claim="Airalo covers 200+ countries.", source_url="https://airalo.com"),
-                Fact(claim="Roaming costs $50+ per trip.", source_url="https://example.com/r"),
+                Fact(claim="Roaming costs $50+ per trip.", source_url="https://www.fcc.gov/roaming"),
                 Fact(claim="eSIM cuts roaming cost by 80%.", source_url="https://example.com/e"),
             ],
         ),
     )
     monkeypatch.setattr(pipeline_cli, "validate_research", lambda r, min_facts=3: (True, [], []))
+    monkeypatch.setattr(pipeline_cli, "PUBLISH_LEDGER", tmp_path / "publish-ledger.jsonl")
     body = _make_high_conf_draft()
     monkeypatch.setattr(
         pipeline_cli, "draft_article",
@@ -303,13 +329,18 @@ def test_draft_one_never_autopublishes_when_flag_off(monkeypatch):
     monkeypatch.setattr(
         pipeline_cli, "analyze_seo",
         lambda draft, pk, secondary_keywords=None, research=None: SEOReport(
-            seo_score=85, confidence=90, meta_title="X", meta_description="Y", excerpt="Z",
+            seo_score=85, confidence=90, meta_title="X",
+            meta_description=(
+                "Living costs, visa rules and internet speeds differ in every hub. "
+                "This guide compares the practical numbers so you can pick a base "
+                "before you book a flight."
+            ),
+            excerpt="Z",
         ),
     )
 
     result = draft_one(client, cfg, "esim-plans")
 
-    assert result["published"] is False
+    assert result["published"] is True
     article_statuses = [s[1].get("status") for s in client.published]
-    assert "published" not in article_statuses
-    assert article_statuses[-1] == "in_review"
+    assert "published" in article_statuses

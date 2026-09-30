@@ -126,7 +126,8 @@ def test_draft_falls_back_to_next_model():
         FakeResp(500, {"error": "boom"}),
         FakeResp(200, {"choices": [{"message": {"content": sample_article_json()}}]}),
     ])
-    # config default fallback includes gemma-4-26b; model=None uses chain
+    # config default fallback chain (nemotron-3-ultra → dots-3-note → lightning);
+    # model=None uses the chain
     d = draft_article("X", "", make_research(), http_client=client, model=None, max_retries=0)
     assert d.has_content
     assert len(client.calls) == 2

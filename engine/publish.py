@@ -37,6 +37,10 @@ from llm import (
     stage_chain,
 )
 from strapi import StrapiClient, StrapiError
+from invariants import article_invariant_errors
+from publish_ledger import LEDGER as SHARED_LEDGER
+from publish_ledger import published_slugs as ledger_slugs
+from publish_ledger import record as record_publish
 
 PUBLISH_STATE_FILE = Path(__file__).resolve().parent / "state" / "publish-pipeline.jsonl"
 DRAFT_JOURNAL = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
@@ -163,39 +167,67 @@ def _append_state(entry: dict) -> None:
     PUBLISH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with PUBLISH_STATE_FILE.open("a") as f:
         f.write(json.dumps(entry) + "\n")
+    # Same event on the shared ledger so the draft lane sees this publish.
+    if entry.get("event") == "published":
+        record_publish(entry, SHARED_LEDGER)
 
 
 def _published_slugs(*, today_only: bool = False) -> set[str]:
-    """Return slugs already published. If today_only, only the current UTC day."""
-    out: set[str] = set()
-    if not PUBLISH_STATE_FILE.exists():
-        return out
-    today = _today_utc()
-    for line in PUBLISH_STATE_FILE.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            e = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if e.get("event") != "published":
-            continue
-        slug = e.get("slug")
-        if not slug:
-            continue
-        if today_only and not (e.get("ts") or "").startswith(today):
-            continue
-        out.add(slug)
-    return out
+    """Slugs already published by either lane. If today_only, the current UTC day."""
+    return ledger_slugs([PUBLISH_STATE_FILE, SHARED_LEDGER, DRAFT_JOURNAL], today_only=today_only)
 
 
 # ----------------------------------------------------------------------------
 # Strapi queries
 # ----------------------------------------------------------------------------
 
+# Which draft&publish layer a query reads. Strapi v5 serves the PUBLISHED layer
+# when no `status` param is given; `?status=draft` serves the WORKING layer.
+PUBLISHED_LAYER = "published"
+DRAFT_LAYER = "draft"
+# The draft layer also returns one row per draft&publish entry, and this instance
+# carries duplicate rows for the same document (verified live 2026-09-25: 82
+# draft rows over 59 documents, 23 documents doubled — one row per write pass,
+# differing only in id/updatedAt/body). A limit-sized page would therefore spend
+# half its budget on duplicates and hide real documents from the lane, so the
+# draft query asks for 2x and dedupes.
+DRAFT_QUERY_PAGE_MULTIPLIER = 2
+
+
+def _candidate_rank(article: dict, layer: str) -> tuple:
+    """Order two copies of the same document; the largest rank wins.
+
+    1. an `in_review` copy outranks a stale mirror of the other layer,
+    2. then the freshest `updatedAt` (the working copy holds the newest body —
+       every lane write since the 2026-09-22 write-layer fix lands there),
+    3. then the draft layer, the lane's own working copy.
+    """
+    return (
+        1 if str(article.get("status") or "") == "in_review" else 0,
+        str(article.get("updatedAt") or ""),
+        1 if layer == DRAFT_LAYER else 0,
+    )
+
+
 def list_in_review(client: StrapiClient, limit: int = 50) -> list[dict]:
-    data = client._request(
+    """Eligible-ish `in_review` candidates from BOTH layers, deduped by documentId.
+
+    Querying the published layer alone is not enough: a document is created by
+    POST (draft layer) and every lane write since the 2026-09-22 write-layer fix
+    (`StrapiClient.update_article` defaults to `status="draft"`) stamps the
+    WORKING layer. A never-published document therefore has no published-layer
+    row at all, and a published one keeps a stale mirror there — so the 13:00
+    lane could not see a single article the 09:00 batch created (verified live
+    2026-09-25: published-layer `in_review` = 1 row, draft layer = 40 rows over
+    21 documents). Both layers are unioned here and reduced to ONE row per
+    documentId (Strapi returns duplicate rows for a document, and the same
+    document can appear in both queries); `_candidate_rank` decides which copy
+    is kept. Gates are unchanged and still keyed on the document/slug, so this
+    only widens what the lane can SEE, never what it may publish.
+
+    Result is capped at `limit` documents, highest confidence first.
+    """
+    published_rows = client._request(
         "GET",
         "/api/articles",
         params={
@@ -203,8 +235,31 @@ def list_in_review(client: StrapiClient, limit: int = 50) -> list[dict]:
             "sort": "confidence:desc",
             "pagination[pageSize]": limit,
         },
-    )
-    return data.get("data", [])
+    ).get("data", [])
+    draft_rows = client._request(
+        "GET",
+        "/api/articles",
+        params={
+            "status": DRAFT_LAYER,
+            "filters[status][$eq]": "in_review",
+            "sort": "confidence:desc",
+            "pagination[pageSize]": limit * DRAFT_QUERY_PAGE_MULTIPLIER,
+        },
+    ).get("data", [])
+
+    best: dict[str, tuple[tuple, dict]] = {}
+    for rows, layer in ((published_rows, PUBLISHED_LAYER), (draft_rows, DRAFT_LAYER)):
+        for article in rows:
+            doc_id = str(article.get("documentId") or "")
+            if not doc_id:
+                continue
+            rank = _candidate_rank(article, layer)
+            if doc_id not in best or rank > best[doc_id][0]:
+                best[doc_id] = (rank, article)
+
+    merged = [entry[1] for entry in best.values()]
+    merged.sort(key=lambda a: int(a.get("confidence") or 0), reverse=True)
+    return merged[:limit]
 
 
 def article_decision(article: dict) -> str:
@@ -862,19 +917,44 @@ def publish_one(
             # in_review articles are still scanned, so a quarantined
             # high-confidence article does not block the daily lane.
             continue
-        if int(a.get("confidence") or 0) >= MIN_CONFIDENCE:
-            winner = a
-            break
+        if int(a.get("confidence") or 0) < MIN_CONFIDENCE:
+            continue
+        # Ratified E: confidence is not enough. Excerpt, meta, a yearless slug,
+        # and two real citations have to hold or this article stays in review.
+        if article_invariant_errors(a):
+            continue
+        winner = a
+        break
 
     if winner is None:
         top = articles[0] if articles else {}
         quarantined = [str(a.get("slug")) for a in articles if is_quarantined(a, journal, approvals)]
         suffix = f" · quarantined (skipped): {', '.join(quarantined)}" if quarantined else ""
+        # Diagnostic (t_e7d03242): a candidate can be visible, non-quarantined
+        # and high-confidence and still unpublishable — the ratified-E invariants
+        # (empty excerpt, unverifiable citations) reject it. Those rows used to
+        # vanish from the skip line, so a lane holding eight publishable-looking
+        # articles reported only "no eligible article" and looked idle instead of
+        # blocked (verified live 2026-09-25: the union makes 22 documents visible,
+        # 8 of them blocked here). Name them, with their failing invariants, so
+        # the 13:00 run says WHY nothing shipped.
+        invariant_blocked = []
+        for a in articles:
+            if is_quarantined(a, journal, approvals):
+                continue
+            if int(a.get("confidence") or 0) < MIN_CONFIDENCE:
+                continue
+            errors = article_invariant_errors(a)
+            if errors:
+                invariant_blocked.append(f"{a.get('slug')} ({'; '.join(errors)})")
+        blocked_suffix = (
+            f" · invariant-blocked: {', '.join(invariant_blocked)}" if invariant_blocked else ""
+        )
         return {
             "event": "skip",
             "reason": (
                 f"no eligible in_review article >= {MIN_CONFIDENCE} confidence "
-                f"(top available: {top.get('slug')}={top.get('confidence')}){suffix}"
+                f"(top available: {top.get('slug')}={top.get('confidence')}){suffix}{blocked_suffix}"
             ),
         }
 
@@ -939,7 +1019,10 @@ def publish_one(
             "status": "published",
             "publishedAt": _now_iso(),
         }
-        client.update_article(doc_id, update_payload)
+        # THE publish step (t_60ad2c8e): the only place in the engine that may
+        # write the published layer. `status="published"` is required — the
+        # default is "draft", which would leave the article half-updated.
+        client.update_article(doc_id, update_payload, status="published")
         result["publishedAt"] = update_payload["publishedAt"]
 
         # cover art (non-fatal)

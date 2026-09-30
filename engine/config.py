@@ -41,7 +41,16 @@ CONFIG_KEYS = (
     "PREMIUM_MODEL_ENABLED",
     "AUTO_PUBLISH_ENABLED",
     "DASHBOARD_ADMIN_TOKEN",
+    # Per-stage provider gate (2026-09-22, t_22a3bbdc). Values: "openrouter"
+    # (the free-model default) or "gemini". Unset/unknown = the dataclass default
+    # (openrouter), so an unset env can never move a stage off the free chain.
+    "RESEARCH_PROVIDER",
+    "DRAFT_PROVIDER",
 )
+
+# Stage providers a run may select through the environment. Only these two
+# stages are gated: `edit` already runs on gemini in production.
+STAGE_PROVIDERS = ("openrouter", "gemini")
 
 
 def _load_dotenv(path: Path = ENV_PATH) -> dict[str, str]:
@@ -98,25 +107,49 @@ class Config:
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     gemini_research_model: str = "gemini-2.5-flash"
     gemini_draft_model: str = "gemini-2.5-flash"
-    gemini_edit_model: str = "gemini-2.5-flash"
-    # Per-stage provider: "gemini" primary, "openrouter" fallback.
-    research_provider: str = "gemini"
-    draft_provider: str = "gemini"
+    # 2026-09 key: gemini-2.5-flash 404s on generation (catalog moved to 3.x/3.8),
+    # and under evening load gemini-flash-latest 503-sheds big payloads while tiny
+    # pings pass (t_8fa118c8 matrix). gemini-flash-lite-latest serves all shapes
+    # incl. the real edit prompt (200 in ~23s) — verified live 2026-09-21.
+    gemini_edit_model: str = "gemini-flash-lite-latest"
+    # Per-stage provider. Gemini was primary until the 09-16 key 401s (DIAGNOSIS.md
+    # t_541d35ee) and everything ran openrouter-only. edit restored to "gemini"
+    # 2026-09-21 (fresh key + served-model pin, kanban t_8fa118c8); research/draft
+    # stay "openrouter" per the free-models rule.
+    research_provider: str = "openrouter"
+    draft_provider: str = "openrouter"
     edit_provider: str = "gemini"
-    # Model rule: FREE MODELS ONLY until production (Guy 2026-08-11)
-    # Verified against OpenRouter catalog 2026-08-11 — qwen3-32b:free no longer
-    # exists. gemma-4-26b-a4b-it:free confirmed working live; gemma-4-31b-it:free
-    # is the stronger writer but has been intermittently rate-limited upstream
-    # (2026-08-11), so it sits in fallback, not primary.
-    research_model: str = "google/gemma-4-26b-a4b-it:free"
-    draft_model: str = "google/gemma-4-26b-a4b-it:free"
+    # Model rule: FREE MODELS ONLY until production (Guy 2026-08-11).
+    # Chain reordered 2026-09-21 (t_02673f32, DIAGNOSIS.md t_541d35ee): both
+    # gemma-4:free hops hard-429 all day (~8 wasted attempts on 09-21), while
+    # nemotron-3-super:free is the only hop that reliably 200s (it carried both
+    # of 09-21's successful stages). It leads.
+    #
+    # Fallback chain rebuilt 2026-09-28 (t_afaa4c2f) from a live probe of the
+    # REAL research payload: the two gemma-4 hops are still hard-429 after three
+    # weeks (upstream Google AI Studio shared pool, no X-RateLimit headers) and
+    # were the only thing behind the model above, so the 09-28 batch had ONE
+    # usable hop and lost both topics when it hung. Measured replacements:
+    #   nvidia/nemotron-3-ultra-550b-a55b:free  200 in 44.8s — 4 facts / 4 URLs
+    #   dots-studio/dots-3-note-preview:free    200 in 71.7s — 3 facts / 3 URLs
+    # nvidia/nemotron-3.5-lightning:free stays LAST: slow and wedge-prone under a
+    # real payload (>170s un-answered; finish_reason=length at its cap) but it is
+    # the only other hop that answers at all, and a hail-mary costs nothing when
+    # nothing follows it — llm.attempt_deadline gives the last hop the whole
+    # remaining stage, and llm._record_hang benches it after two wedges in a row.
+    research_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    draft_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
     premium_model: str = "google/gemini-2.5-pro"  # gated: only for final-draft polish
     premium_enabled: bool = False  # False until Guy flips to production
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     fallback_models: tuple = (
-        "google/gemma-4-31b-it:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "nvidia/nemotron-nano-12b-v2-vl:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "dots-studio/dots-3-note-preview:free",
+        # 2026-09-22 (t_6789212d): nemotron-nano-12b-v2-vl:free 404s on every call
+        # ("No endpoints found" — retired from OpenRouter), so the last fallback
+        # could never serve. Live-probed both candidates before the swap; 3.5
+        # lightning answered a real completion.
+        "nvidia/nemotron-3.5-lightning:free",
     )
     # Trust-ladder defaults (overridable per run)
     auto_publish_threshold: int = 80
@@ -141,6 +174,33 @@ class Config:
     def is_free_model(self, model: str | None = None) -> bool:
         m = model or self.draft_model
         return m.endswith(":free") or "free" in m.lower()
+
+
+def _stage_provider(env: Mapping[str, str], key: str) -> str:
+    """Read a per-stage provider override from the resolved environment.
+
+    Default and unknown values fall back to ``openrouter`` — the free-model
+    chain Guy's 2026-08-11 rule mandates — so a typo (or an unset var) can never
+    silently move a stage onto a paid provider. Only an explicit
+    ``gemini``/``openrouter`` is honoured, and it is announced by name on stderr
+    (never by value): the stage-provider change is a spend-policy decision Guy
+    signs off on per run, so it must be visible in the run log.
+
+    Named keys only in the message — this never prints a value.
+    """
+    raw = (env.get(key) or "").strip().lower()
+    if not raw:
+        return "openrouter"
+    if raw not in STAGE_PROVIDERS:
+        print(
+            f"[config] {key} is not one of {'/'.join(STAGE_PROVIDERS)} "
+            "— keeping the free openrouter chain",
+            file=sys.stderr,
+        )
+        return "openrouter"
+    if raw != "openrouter":
+        print(f"[config] {key} selects the '{raw}' provider for this run", file=sys.stderr)
+    return raw
 
 
 def load_config(
@@ -175,6 +235,11 @@ def load_config(
         premium_enabled=premium,
         auto_publish_enabled=auto_publish,
         dashboard_admin_token=env.get("DASHBOARD_ADMIN_TOKEN", ""),
+        # Stage-provider gate (t_22a3bbdc): research/draft stay on the free
+        # OpenRouter chain unless a run explicitly selects gemini, e.g.
+        #   RESEARCH_PROVIDER=gemini DRAFT_PROVIDER=gemini engine.cli run-batch 1
+        research_provider=_stage_provider(env, "RESEARCH_PROVIDER"),
+        draft_provider=_stage_provider(env, "DRAFT_PROVIDER"),
         env_overrides=overridden,
     )
 

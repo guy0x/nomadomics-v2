@@ -26,18 +26,31 @@ from typing import Optional
 import httpx
 
 from config import Config
+import llm
 from llm import (
     LLM_TIMEOUT,
+    MIN_USABLE_STAGE_SECONDS,
     ProviderAuthError,
     StageBudget,
     StageDeadlineExceeded,
+    _hop_benched,
+    _record_429,
+    _record_hang,
+    _record_ok,
+    attempt_deadline,
     auth_failure_record,
+    deadline_post,
     endpoint_for,
     headers_for,
     is_auth_status,
     is_retryable_status,
+    MalformedHopResponse,
+    is_malformed_hop_response,
+    is_transient_hop_error_body,
     resolve,
+    should_retry_malformed_hop,
     stage_chain,
+    usable_hops_after,
 )
 from research.research import ResearchResult
 from writer.writer import ArticleDraft, _load_prompt
@@ -170,22 +183,39 @@ def edit_draft(
     last_err: Exception | None = None
     auth_failures: list[dict] = []  # structured records for degraded-hop reporting
     try:
-        for entry in chain:
+        for index, entry in enumerate(chain):
             if budget.expired():
                 break
             provider, model_id = resolve(cfg, entry)
+            if _hop_benched(provider, model_id):
+                # Benched for the rest of the run: this hop already struck out
+                # (429s or wedges) HOP_429_SKIP_THRESHOLD times in a row in
+                # earlier stages (the 09-21 run paid ~8 attempts to the same
+                # dead gemma:free hops across stages). No attempt, no sleep.
+                budget.note(provider, model_id, f"skip — hop benched after {llm.HOP_429_SKIP_THRESHOLD} strikes in a row", time.monotonic())
+                continue
             base_url, _ = endpoint_for(cfg, provider)
             headers = headers_for(cfg, provider)
             payload["model"] = model_id
+            hops_after = usable_hops_after(cfg, chain, index)
             for attempt in range(max_retries + 1):
                 if not budget.take():
                     break
                 started = time.monotonic()
+                attempt_dl = attempt_deadline(budget, hops_after)
+                budget.note(provider, model_id, "posting", started, extra=f"attempt-deadline {attempt_dl:.0f}s", pre=True)
                 try:
-                    resp = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                    resp = deadline_post(
+                        client,
+                        f"{base_url}/chat/completions",
+                        headers=headers,
+                        payload=payload,
+                        deadline=attempt_dl,
+                    )
                     if is_auth_status(resp.status_code):
                         # Credential rejection: one attempt, no retry, no key
                         # material in any message — then the fallback hop.
+                        _record_ok(provider, model_id)
                         budget.note(provider, model_id, f"{resp.status_code} auth rejected — skipping hop", started)
                         rec = auth_failure_record(provider, model_id, resp.status_code, "edit")
                         auth_failures.append(rec)
@@ -195,26 +225,60 @@ def edit_draft(
                         last_err = ProviderAuthError(provider, model_id, resp.status_code)
                         break
                     if resp.status_code == 429:
+                        _record_429(provider, model_id)
                         budget.note(provider, model_id, "429 rate-limited — retrying", started)
-                        time.sleep(2.0 * (attempt + 1))
+                        time.sleep(min(2.0 * (attempt + 1), max(0.0, budget.remaining() - MIN_USABLE_STAGE_SECONDS)))
                         continue
+                    _record_ok(provider, model_id)
                     if not is_retryable_status(resp.status_code):
                         budget.note(provider, model_id, f"{resp.status_code} non-retryable — skipping hop", started)
                         last_err = RuntimeError(f"{provider}/{model_id} -> HTTP {resp.status_code}")
                         break
                     resp.raise_for_status()
                     data = resp.json()
-                    content = data["choices"][0]["message"]["content"]
+                    try:
+                        content = data["choices"][0]["message"]["content"]
+                    except (KeyError, IndexError, TypeError) as e:
+                        if not is_malformed_hop_response(e):
+                            raise  # pragma: no cover — classifier is total over this tuple
+                        # 200 without a usable completion — broken hop (invalid
+                        # JSON/HTML, empty or streaming-shaped choices). Like a
+                        # 404: retrying THIS hop cannot help — unless the body is
+                        # a wrapped upstream error (transient), see below.
+                        raise MalformedHopResponse(
+                            provider, model_id, transient=is_transient_hop_error_body(data)
+                        ) from e
                     edited = _extract_edit(content, draft)
                     if edited.has_content:
                         budget.note(provider, model_id, "200 ok", started, extra=f" — {edited.word_count} words")
                         return edited
                     budget.note(provider, model_id, "200 but empty edit", started)
                     last_err = ValueError("edit parsed to no content")
-                except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, KeyError) as e:
+                except StageDeadlineExceeded as e:
+                    # Wedged hop: it spent its whole attempt share (see
+                    # llm.attempt_deadline) without answering. Move to the NEXT
+                    # hop — a peer that just hung will not answer sooner on a
+                    # retry, and a retry would re-pay the share — and let the
+                    # run-wide memo bench it if it repeats (llm._record_hang).
+                    # Before this clause the exception escaped the hop loop and
+                    # the remaining hops were never tried.
                     budget.note(provider, model_id, f"error {type(e).__name__}", started, extra=f" — {e}")
                     last_err = e
-                    time.sleep(1.5 * (attempt + 1))
+                    _record_hang(provider, model_id)
+                    break
+                except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, MalformedHopResponse) as e:
+                    budget.note(provider, model_id, f"error {type(e).__name__}", started, extra=f" — {e}")
+                    last_err = e
+                    if isinstance(e, MalformedHopResponse):
+                        if should_retry_malformed_hop(e, attempt) and not budget.expired():
+                            # HTTP 200 wrapping a TRANSIENT upstream error
+                            # ("provider_overloaded" 503): the same hop usually
+                            # answers a second later (09-22 evidence, t_22a3bbdc).
+                            budget.note(provider, model_id, "retrying same hop (transient upstream error in 200)", started)
+                            time.sleep(min(1.0, max(0.0, budget.remaining() - MIN_USABLE_STAGE_SECONDS)))
+                            continue
+                        break  # dead hop (200 sans 'choices') — next hop, no retry
+                    time.sleep(min(1.5 * (attempt + 1), max(0.0, budget.remaining() - MIN_USABLE_STAGE_SECONDS)))
         if budget.expired():
             print(f"  [edit] {budget.exhaustion_reason()}", file=sys.stderr, flush=True)
             last_err = last_err or StageDeadlineExceeded(f"edit: {budget.exhaustion_reason()}")

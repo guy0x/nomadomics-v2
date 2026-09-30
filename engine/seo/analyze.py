@@ -16,6 +16,7 @@ from typing import Optional
 
 from research.research import ResearchResult
 from writer.writer import ArticleDraft
+from freshness import freshness_report
 
 # Confidence weights (plan §7): research 30 / SEO 25 / voice 25 / factual 20
 RESEARCH_W = 0.30
@@ -37,6 +38,8 @@ class SEOReport:
     research_score: int = 0
     structure_score: int = 0
     breakdown: dict = field(default_factory=dict)
+    freshness_issues: list = field(default_factory=list)
+    freshness_penalty: int = 0
 
 
 def _count_keyword(text: str, keyword: str) -> int:
@@ -105,6 +108,7 @@ def analyze_seo(
     primary_keyword: str,
     secondary_keywords: Optional[list[str]] = None,
     research: Optional[ResearchResult] = None,
+    newest_year: Optional[int] = None,
 ) -> SEOReport:
     prim = (primary_keyword or "").strip()
     secs = [s for s in (secondary_keywords or []) if s.strip()]
@@ -171,10 +175,12 @@ def analyze_seo(
     first_sentence = _first_sentence(body)
     meta_title = _make_meta_title(prim, title_line)
     meta_desc = _make_meta_desc(body, prim)
-    if 50 <= len(meta_title) <= 60:
-        add(10, "meta title 50-60 chars")
-    if 140 <= len(meta_desc) <= 160:
-        add(10, "meta description 140-160 chars")
+    # 47c = the 60c SERP budget minus the 13c " · Nomadomics" brand suffix, so a
+    # title in this band is served WITH the brand (t_7197386f).
+    if 40 <= len(meta_title) <= META_TITLE_VALUE_MAX:
+        add(10, "meta title fits the 47c branded SERP budget")
+    if META_DESC_MIN <= len(meta_desc) <= META_DESC_MAX:
+        add(10, "meta description 120-160 chars")
 
     # Structure bonus: tables/bullets/H3/pros-cons raise the on-page SEO score.
     structure = _structure_score(body)
@@ -191,6 +197,14 @@ def analyze_seo(
     voice_score = _voice_score(body)
     # Factual grounding
     factual_score = _factual_score(draft, research)
+    # Fact-freshness gate (t_00bfe56f): a body whose money figures carry no
+    # dated source in their citation context loses factual confidence, so a
+    # stale YMYL number is visible before the article reaches in_review.
+    # newest_year is opt-in: the auto-scoring path never passes it, keeping
+    # the scorer immune to calendar-year vs data-vintage staleness while
+    # review-time callers opt into the stale check.
+    fresh = freshness_report(body, newest_year=newest_year)
+    factual_score = max(0, factual_score - fresh.penalty)
     # Research validity
     research_score = _research_score(research)
 
@@ -215,11 +229,16 @@ def analyze_seo(
         factual_score=factual_score,
         research_score=research_score,
         structure_score=structure,
+        freshness_issues=fresh.issues,
+        freshness_penalty=fresh.penalty,
         breakdown={
             "h1_kw": has_h1_kw, "n_h2": len(h2s), "n_faq": len(faqs),
             "words": wc, "density": round(density, 4),
             "meta_title_len": len(meta_title), "meta_desc_len": len(meta_desc),
             "structure": structure,
+            "freshness_penalty": fresh.penalty,
+            "freshness_undated": sum(1 for i in fresh.issues if i.kind == "no_dated_source"),
+            "freshness_stale": sum(1 for i in fresh.issues if i.kind == "stale"),
         },
     )
 
@@ -248,25 +267,105 @@ def _first_sentence(md: str) -> str:
     return out
 
 
+# Meta budgets (t_7197386f). The SERP title budget is 60c INCLUDING the
+# site-wide " · Nomadomics" brand suffix (frontend/src/lib/seo.ts::TITLE_BUDGET,
+# 13c), so the authored value may use at most 47c. The description budget is the
+# Strapi schema cap; Google renders ~155c, and the copy deck targets 120-160c.
+META_TITLE_VALUE_MAX = 47
+META_DESC_MIN = 120
+META_DESC_MAX = 160
+
+
+def _fit_meta_title_value(value: str) -> str:
+    """Fit a metaTitle VALUE into the 47c branded budget.
+
+    The served title is `value + " · Nomadomics"` and must stay within the 60c
+    SERP budget. A cut lands on a word boundary — never the old
+    `base[:57] + "..."` hard cut, which shipped 60c metaTitles that read as
+    broken (live 2026-09-28: three published titles ended in a literal '...').
+    """
+    s = re.sub(r"\s+", " ", value or "").strip()
+    if len(s) <= META_TITLE_VALUE_MAX:
+        return s
+    cut = s[: META_TITLE_VALUE_MAX].rsplit(" ", 1)[0].rstrip(" -–—:;,.")
+    return cut or s[: META_TITLE_VALUE_MAX].rstrip(" -–—:;,.")
+
+
 def _make_meta_title(prim: str, title_line: str) -> str:
     base = title_line.lstrip("# ").strip() or (prim + " Guide")
     base = re.sub(r"\s*\|\s*.*$", "", base).strip()
-    if len(base) > 60:
-        base = base[:57].rstrip() + "..."
-    return base
+    return _fit_meta_title_value(base)
+
+
+def _sentences(body: str) -> list[str]:
+    """Clean sentence strings from a markdown body — the raw material the
+    excerpt and the meta description are both drawn from (headings and markup
+    symbols removed, newlines collapsed into spaces)."""
+    text = re.sub(r"^#.*$", "", body or "", flags=re.M)
+    text = re.sub(r"[#*`>]", "", text)
+    text = text.replace("\n", " ").strip()
+    return [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
+
+
+def _word_prefix(text: str, limit: int) -> str:
+    """First words of `text` up to `limit` chars, on a word boundary, trailing
+    separators stripped — never a mid-word cut and never a literal '...'."""
+    s = re.sub(r"\s+", " ", text or "").strip()
+    if len(s) <= limit:
+        return s
+    cut = s[:limit].rsplit(" ", 1)[0].rstrip(" -–—:;,")
+    return cut or s[:limit].rstrip(" -–—:;,")
+
+
+def _fit_meta_desc(candidate: str) -> str:
+    """Fit a description into the 120-160c budget, on word boundaries, with a
+    terminal full stop.
+
+    Never a literal '...' cut: the old `s[:157] + "..."` burned three
+    characters on punctuation and read as truncated in the SERP (the monitor
+    and the write-time invariant both reject a trailing ellipsis). A candidate
+    that already ends in punctuation keeps it; otherwise a period is added so
+    the snippet is a complete sentence.
+    """
+    s = re.sub(r"\s+", " ", candidate or "").strip()
+    if len(s) > META_DESC_MAX:
+        s = _word_prefix(s, META_DESC_MAX)
+    if s and not s.endswith((".", "!", "?", ")")):
+        s += "."
+    return s
 
 
 def _make_meta_desc(body: str, prim: str) -> str:
-    s = _first_sentence(body)
-    if s.endswith("\u2026"):
-        # Truncated opener: the metaDescription invariant rejects a trailing
-        # ellipsis, so present the cut as the complete sentence it acts as.
-        s = s[:-1].rstrip(" ,;:") + "."
-    if len(s) < 140 and prim:
-        s = f"{s} Learn how to save money on {prim}."
-    if len(s) > 160:
-        s = s[:157].rstrip() + "..."
-    return s
+    """A 120-160c meta description derived from the article's own sentences and
+    guaranteed distinct from the excerpt.
+
+    The old generator had exactly three outcomes and none was authored copy —
+    `md == excerpt` for 140-160c openers, the WordPress-migration tail
+    ` Learn how to save money on <prim>.` for short openers, and a mid-word
+    `s[:157] + "..."` cut over 160c (proved live 2026-09-28). The excerpt is the
+    opener PLUS whatever fits under its ~155c budget, so the description must
+    draw from a DIFFERENT window: it starts at sentence 2 and only falls back to
+    the opener when the body text is too thin to fill the band on its own
+    (the two strings still differ, the description being longer). `prim` is kept
+    for call compatibility; it is never appended as a template.
+    """
+    sentences = _sentences(body)
+    if not sentences:
+        return _fit_meta_desc("")
+    window = sentences[1:] if len(sentences) > 1 else sentences
+    desc = ""
+    for next_sentence in window:
+        joined = f"{desc} {next_sentence}".strip()
+        if len(joined) > META_DESC_MAX:
+            if len(desc) < META_DESC_MIN:
+                desc = f"{desc} {_word_prefix(next_sentence, META_DESC_MAX - len(desc) - 1)}".strip()
+            break
+        desc = joined
+        if len(desc) >= META_DESC_MIN:
+            break
+    if len(desc) < META_DESC_MIN and len(sentences) > 1:
+        desc = f"{sentences[0]} {desc}".strip()
+    return _fit_meta_desc(desc)
 
 
 def _voice_score(body: str) -> int:
@@ -338,9 +437,9 @@ def _build_fixes(seo_score, *, has_h1_kw, n_h2, n_faq, wc, meta_title, meta_desc
             fixes.append(f"Add FAQ questions (have {n_faq}, want 3+).")
         if wc < 800:
             fixes.append(f"Expand the article (currently {wc} words).")
-        if not (50 <= len(meta_title) <= 60):
+        if not (40 <= len(meta_title) <= META_TITLE_VALUE_MAX):
             fixes.append(f"Adjust meta title length (currently {len(meta_title)}).")
-        if not (140 <= len(meta_desc) <= 160):
+        if not (META_DESC_MIN <= len(meta_desc) <= META_DESC_MAX):
             fixes.append(f"Adjust meta description length (currently {len(meta_desc)}).")
         if not (0.004 <= density <= 0.02):
             fixes.append(f"Tune keyword density (currently {density:.1%}).")

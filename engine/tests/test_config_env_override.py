@@ -289,6 +289,48 @@ def test_the_real_dotenv_is_never_modified_by_an_override(monkeypatch):
     assert hashlib.sha256(ENV_PATH.read_bytes()).hexdigest() == before
 
 
+# ---------------------------------------------- per-stage provider gate (t_22a3bbdc)
+
+
+def test_research_and_draft_default_to_the_free_openrouter_chain(dotenv):
+    cfg = load_config(env_path=dotenv)
+    assert cfg.research_provider == "openrouter"
+    assert cfg.draft_provider == "openrouter"
+
+
+def test_env_can_point_research_and_draft_at_gemini_for_one_run(dotenv, monkeypatch):
+    """The spend-policy switch Guy signs off on per run: no code edit needed."""
+    monkeypatch.setenv("RESEARCH_PROVIDER", "gemini")
+    monkeypatch.setenv("DRAFT_PROVIDER", "GEMINI")  # case-insensitive
+    cfg = load_config(env_path=dotenv)
+    assert cfg.research_provider == "gemini"
+    assert cfg.draft_provider == "gemini"
+
+
+def test_env_can_move_a_stage_back_to_openrouter(dotenv, monkeypatch):
+    monkeypatch.setenv("DRAFT_PROVIDER", "openrouter")
+    assert load_config(env_path=dotenv).draft_provider == "openrouter"
+
+
+def test_unknown_stage_provider_falls_back_to_the_free_chain(dotenv, monkeypatch, capsys):
+    """A typo must never silently move a stage off the free models — and the
+    fallback is announced by KEY NAME only, never by value."""
+    monkeypatch.setenv("RESEARCH_PROVIDER", "gemmini")
+    cfg = load_config(env_path=dotenv)
+    assert cfg.research_provider == "openrouter"
+    err = capsys.readouterr().err
+    assert "RESEARCH_PROVIDER" in err
+    assert "gemmini" not in err  # never echo the value
+    assert cfg.draft_provider == "openrouter"
+
+
+def test_stage_provider_is_reported_by_redact(dotenv, monkeypatch):
+    monkeypatch.setenv("RESEARCH_PROVIDER", "gemini")
+    cfg = load_config(env_path=dotenv)
+    assert redact(cfg)["research_provider"] == "gemini"
+    assert redact(cfg)["draft_provider"] == "openrouter"
+
+
 # -------------------------------------------------- real CLI (subprocess)
 
 

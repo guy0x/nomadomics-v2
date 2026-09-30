@@ -117,6 +117,7 @@ def test_zero_limit_does_not_leak_a_previous_reclaim_notice(monkeypatch):
         run_batch(client, make_cfg(), 0)
 
     assert pipeline_cli.last_reclaimed() == []
+    assert pipeline_cli.last_failed_reclaimed() == []
 
 
 def test_limit_one_is_still_forwarded_unchanged(monkeypatch):
@@ -128,7 +129,9 @@ def test_limit_one_is_still_forwarded_unchanged(monkeypatch):
 
     assert client.pending_limit == 1
     assert [r["slug"] for r in results] == ["y"]
-    assert client.calls == ["list_inflight", "list_pending"]
+    # two status-filtered reads precede the listing (in-flight reclaim, then the
+    # stranded-`failed` reclaim); the limit itself still reaches Strapi unchanged
+    assert client.calls == ["list_inflight", "list_inflight", "list_pending"]
 
 
 # --- argument parsing --------------------------------------------------------

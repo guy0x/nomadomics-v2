@@ -274,7 +274,7 @@ class FakeStrapi:
         self.articles.append(doc)
         return {"data": doc}
 
-    def update_article(self, doc_id, fields):
+    def update_article(self, doc_id, fields, *, status="draft"):
         self.published.append((doc_id, fields))
 
     def count_published(self):
@@ -295,7 +295,13 @@ def test_pipeline_journals_auth_degradation_and_continues(tmp_path, monkeypatch)
     monkeypatch.setattr(pipeline_cli, "validate_research", lambda r, min_facts=3: (True, [], []))
     monkeypatch.setattr(
         pipeline_cli, "research_topic",
-        lambda topic, kw, config=None, **k: make_research(),
+        lambda topic, kw, config=None, **k: ResearchResult(
+            topic="eSIM",
+            facts=[
+                Fact(claim="Airalo covers 200+ countries.", source_url="https://airalo.com"),
+                Fact(claim="The FCC publishes roaming guidance.", source_url="https://www.fcc.gov/roaming"),
+            ],
+        ),
     )
     monkeypatch.setattr(
         pipeline_cli, "draft_article",

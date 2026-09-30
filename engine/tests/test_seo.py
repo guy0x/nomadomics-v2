@@ -103,7 +103,61 @@ def test_long_opener_draft_keeps_meta_and_excerpt():
     assert len(report.excerpt) <= 220            # the monitor's card-length rule
     assert report.excerpt.endswith(("…", ".", "!", "?"))
     assert report.meta_description.endswith(".")
-    assert not report.meta_description.endswith("…")   # sibling rule: no trailing ellipsis
+    # sibling rules (t_7197386f): no trailing ellipsis — one-char OR three-dot —
+    # and the description must be authored copy, never the excerpt verbatim.
+    assert not report.meta_description.endswith(("…", "..."))
+    assert report.meta_description != report.excerpt
+
+
+def _pad_sentence(target: int) -> str:
+    """A single sentence padded with words to ~`target` chars, on a word
+    boundary, ending in a full stop — so tests can hit the four opener-length
+    branches of the old `_make_meta_desc` (~60c / 140c / 152c / 200c)."""
+    s = "Budget travel in Lisbon is cheaper than most nomads expect"
+    while len(s) < target:
+        s += " and worth planning for"
+    if len(s) > target:
+        s = s[:target].rsplit(" ", 1)[0]
+    return s.rstrip() + "."
+
+
+def test_meta_desc_four_branches_never_echoes_the_excerpt():
+    """t_7197386f AC1: `_make_meta_desc` must never return the excerpt verbatim,
+    never contain the migration template tail, never end in a literal ellipsis,
+    and must stay within 120-160c — for every opener-length branch the old
+    generator had (opener ~60c -> template tail, 140c/152c -> md == excerpt,
+    200c -> s[:157] + '...')."""
+    from seo.analyze import _first_sentence, _make_meta_desc
+
+    for target in (60, 140, 152, 200):
+        body = (
+            "# Budget Travel Guide 2026\n\n"
+            f"{_pad_sentence(target)}\n\n"
+            "Most nomads blow their budget in the first week on flights, "
+            "cafes and unprepared SIM plans. A few simple switches keep "
+            "monthly costs under control without sacrificing the lifestyle.\n\n"
+            "## Costs to watch\nFlights, accommodation and data.\n"
+        )
+        excerpt = _first_sentence(body)
+        md = _make_meta_desc(body, "budget travel")
+        assert md != excerpt, f"{target}c opener: md echoes the excerpt verbatim"
+        assert "Learn how to save money on" not in md
+        assert not md.endswith(("...", "\u2026")), f"{target}c opener: ellipsis cut"
+        assert 120 <= len(md) <= 160, (
+            f"{target}c opener: description {len(md)}c outside 120-160"
+        )
+        assert md.endswith((".", "!", "?", ")"))
+
+def test_meta_title_value_leaves_room_for_the_brand():
+    """t_7197386f: the served title is value + ' · Nomadomics' (13c) and must fit
+    the 60c SERP budget (frontend/src/lib/seo.ts::TITLE_BUDGET); the generator
+    must never emit the old base[:57] + '...' 60c ellipsis title."""
+    from seo.analyze import _make_meta_title
+
+    t = _make_meta_title("kw", "# Best eSIM Travel Plans for Budget-Conscious Digital Nomads in 2025")
+    assert t == "Best eSIM Travel Plans for Budget-Conscious"
+    assert not t.endswith("...") and "\u2026" not in t
+    assert len(t) + 13 <= 60, f"branded title would exceed the budget: {t!r}"
 
 
 def test_poor_draft_flagged_with_fixes():

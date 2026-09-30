@@ -100,21 +100,91 @@ class StrapiClient:
     def create_article(self, fields: dict) -> dict:
         return self._request("POST", "/api/articles", {"data": fields})
 
-    def update_article(self, document_id: str, fields: dict) -> dict:
-        return self._request("PUT", f"/api/articles/{document_id}", {"data": fields})
+    # Which draft&publish layer a PUT writes to. See update_article().
+    _ARTICLE_WRITE_STATUSES = (None, "draft", "published")
 
-    def list_drafts(self) -> list[dict]:
-        data = self._request(
+    def update_article(
+        self, document_id: str, fields: dict, *, status: Optional[str] = "draft"
+    ) -> dict:
+        """PUT an article update, explicit about WHICH layer it lands on.
+
+        Strapi v5 (draftAndPublish: true, verified on ^5.49/5.50) treats a PUT
+        with no `?status=` as a write-through to the PUBLISHED layer, re-stamping
+        `publishedAt` and serving the new body live within the frontend's ISR
+        window. That is the 2026-09-22 silent-republish incident (kanban
+        t_60ad2c8e): a code path meant to "edit a draft" shipped the edit.
+
+        `status` picks the layer:
+          - ``"draft"`` (DEFAULT, fail-safe) -> ``?status=draft``, writes the
+            draft layer only; the published layer stays byte-identical.
+          - ``"published"`` -> ``?status=published``. This is a PUBLISH. Only
+            the publish step may pass it.
+
+        Passing ``None`` omits the query param and therefore writes through to
+        the published layer — do not use it to edit a draft.
+
+        An explicit ``publishedAt`` in `fields` is NOT reliable: on v5 the
+        document service owns that column and ignores the payload value (the
+        observed 07:32 write kept the service-stamped time), so a timestamp can
+        never be restored by sending one. Set real publish state only via
+        ``status="published"``.
+        """
+        if status not in self._ARTICLE_WRITE_STATUSES:
+            raise ValueError(
+                f"update_article: status must be one of "
+                f"{self._ARTICLE_WRITE_STATUSES!r}, got {status!r}"
+            )
+        params = {"status": status} if status else None
+        return self._request(
+            "PUT", f"/api/articles/{document_id}", {"data": fields}, params=params
+        )
+
+    # Which draft&publish layer a READ lands on. Strapi v5 serves the PUBLISHED
+    # layer unless `?status=draft` is passed; since the 2026-09-22 write-layer
+    # fix every lane write lands on the WORKING layer, so a read that omits the
+    # param shows stale published-layer mirrors of the articles instead of the
+    # articles themselves (verified live 2026-09-25: published-layer `in_review`
+    # = 1 row vs 40 draft-layer rows — `engine.cli drafts` printed 3 rows and
+    # hid the whole backlog). See update_article() for the write side.
+    ARTICLE_DRAFT_LAYER = "draft"
+    # This instance returns duplicate rows per document (one per write pass,
+    # differing only in id/updatedAt), so a limit-sized page wastes half its
+    # budget on duplicates — ask for 2x and dedupe.
+    _DRAFT_QUERY_PAGE_MULTIPLIER = 2
+
+    def list_drafts(self, limit: int = 20) -> list[dict]:
+        """Working-layer articles awaiting review, one row per document.
+
+        Reads `?status=draft` (see ARTICLE_DRAFT_LAYER) for app status
+        draft/in_review, reduces duplicate rows to the freshest copy of each
+        documentId, and returns the newest `limit` documents.
+        """
+        rows = self._request(
             "GET",
             "/api/articles",
             params={
+                "status": self.ARTICLE_DRAFT_LAYER,
                 "filters[status][$in][0]": "draft",
                 "filters[status][$in][1]": "in_review",
                 "sort": "createdAt:desc",
-                "pagination[pageSize]": 20,
+                "pagination[pageSize]": limit * self._DRAFT_QUERY_PAGE_MULTIPLIER,
             },
+        ).get("data", [])
+
+        best: dict[str, dict] = {}
+        for row in rows:
+            doc_id = str(row.get("documentId") or "")
+            if not doc_id:
+                continue
+            seen = best.get(doc_id)
+            if seen is None or str(row.get("updatedAt") or "") > str(
+                seen.get("updatedAt") or ""
+            ):
+                best[doc_id] = row
+        newest = sorted(
+            best.values(), key=lambda r: str(r.get("createdAt") or ""), reverse=True
         )
-        return data.get("data", [])
+        return newest[:limit]
 
     def count_published(self) -> int:
         """Number of published articles (proxy for human-reviewed articles —

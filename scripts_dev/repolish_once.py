@@ -1,4 +1,10 @@
-"""One-off: re-polish an already-published article in place (keeps status/publishedAt)."""
+"""One-off: re-polish an already-published article.
+
+Writes the DRAFT layer only (t_60ad2c8e): without an explicit `?status=`, Strapi
+v5 writes through to the published layer and re-stamps `publishedAt`, silently
+republishing. An edit of a live article is a two-step: run this, then publish
+deliberately (engine.cli publish / Strapi admin).
+"""
 import sys
 
 sys.path.insert(0, "engine")
@@ -37,7 +43,7 @@ client.update_article(a["documentId"], {
     "bodyMarkdown": md,
     "metaTitle": meta_title,
     "metaDescription": meta_desc,
-})
+}, status="draft")
 
 # Year hygiene guard (same as publish_one): force current year in meta fields.
 import re as _re
@@ -47,9 +53,10 @@ meta_desc = _re.sub(r"\b20\d{2}\b", CUR, meta_desc)
 client.update_article(a["documentId"], {
     "metaTitle": meta_title,
     "metaDescription": meta_desc,
-})
+}, status="draft")
 print("year-guard pass applied")
-print("re-polished OK")
+print("re-polished OK — DRAFT layer only; the live body is unchanged until a "
+      "deliberate publish step (t_60ad2c8e).")
 print("  TL;DR present:", "## TL;DR" in md)
 print("  metaTitle len:", len(meta_title))
 print("  metaDescription len:", len(meta_desc))

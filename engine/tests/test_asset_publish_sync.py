@@ -155,6 +155,7 @@ class FakeClient:
     def __init__(self, articles):
         self.articles = articles
         self.updates = []
+        self.write_statuses = []  # layer each PUT targeted (t_60ad2c8e)
 
     def _request(self, method, path, params=None, body=None):
         if path == "/api/articles" and params and params.get("filters[status][$eq]") == "in_review":
@@ -163,8 +164,9 @@ class FakeClient:
             return {"data": [a for a in self.articles if a.get("status") == "published"]}
         return {"data": []}
 
-    def update_article(self, doc_id, fields):
+    def update_article(self, doc_id, fields, *, status="draft"):
         self.updates.append((doc_id, fields))
+        self.write_statuses.append(status)
 
     def close(self):
         pass
@@ -173,6 +175,7 @@ class FakeClient:
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(publish, "PUBLISH_STATE_FILE", tmp_path / "publish-pipeline.jsonl")
+    monkeypatch.setattr(publish, "SHARED_LEDGER", tmp_path / "publish-ledger.jsonl")
     monkeypatch.setattr(publish, "DRAFT_JOURNAL", tmp_path / "pipeline.jsonl")
     monkeypatch.setattr(publish, "RELEASE_APPROVALS", tmp_path / "release-approvals.jsonl")
     monkeypatch.setattr(publish, "SNAPSHOT", tmp_path / "published-slugs.json")
@@ -187,12 +190,22 @@ def _ready_article():
         "title": "Cost of Living in Chiang Mai",
         "confidence": 90,
         "status": "in_review",
-        "bodyMarkdown": "# Cost of Living in Chiang Mai\n\nBody content here.\n",
+        "bodyMarkdown": (
+            "# Cost of Living in Chiang Mai\n\nBody content here.\n"
+            "https://www.numbeo.com/cost-of-living\nhttps://www.expatistan.com/cost-of-living\n"
+        ),
+        "excerpt": "Chiang Mai is one of the cheaper long-stay cities.",
+        "metaTitle": "Cost of Living in Chiang Mai",
+        "metaDescription": (
+            "Chiang Mai rents, food and coworking costs in real numbers. "
+            "This guide breaks down a monthly budget so you can decide whether "
+            "the city fits your income."
+        ),
         "focusKeyword": "chiang mai cost of living",
     }
 
 
-def _publish(monkeypatch, *, page_code, asset_code, push_result=(True, "pushed 2 commit(s)")):
+def _publish(monkeypatch, *, page_code, asset_code, push_result=(True, "pushed 2 commit(s)"), client=None):
     """Run the real publish_one with the network + side effects stubbed."""
     monkeypatch.setattr(publish, "polish_article", lambda *a, **k: None)
     monkeypatch.setattr(publish, "generate_cover", lambda slug, title, **k: True)
@@ -209,7 +222,7 @@ def _publish(monkeypatch, *, page_code, asset_code, push_result=(True, "pushed 2
     monkeypatch.setattr(publish, "ASSET_VERIFY_DELAY_SECONDS", 0.0)
     monkeypatch.delenv("NOMADOMICS_ASSET_VERIFY_ATTEMPTS", raising=False)
     monkeypatch.delenv("NOMADOMICS_ASSET_VERIFY_DELAY", raising=False)
-    return publish.publish_one(FakeClient([_ready_article()]), None)  # type: ignore[arg-type]
+    return publish.publish_one(client or FakeClient([_ready_article()]), None)  # type: ignore[arg-type]
 
 
 def test_publish_one_pushes_after_commit(monkeypatch):
@@ -240,6 +253,16 @@ def test_publish_one_reports_failed_push(monkeypatch):
     assert result["push"] == "failed"
     assert result["pushDetail"] == "remote: Permission denied"
     assert result["live"] is False
+
+
+def test_publish_one_writes_the_published_layer(monkeypatch):
+    """Layer discipline (t_60ad2c8e): the publish step is the ONLY path allowed
+    to write the published layer, and it must say so explicitly — with the
+    fail-safe default ('draft') the article would silently half-update."""
+    client = FakeClient([_ready_article()])
+    result = _publish(monkeypatch, page_code=200, asset_code=200, client=client)
+    assert result["event"] == "published"
+    assert client.write_statuses == ["published"]
 
 
 # --- CLI exit code -----------------------------------------------------------
