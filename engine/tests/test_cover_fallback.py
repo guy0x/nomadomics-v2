@@ -85,6 +85,22 @@ def test_cake_is_preferred_then_fallback(both_keys):
     assert labels[1] == FALLBACK_IMAGE_MODEL
 
 
+def test_z_image_turbo_is_the_primary_cover_model(both_keys):
+    """Card t_ac50dfce: z-image-turbo replaced hidream as the PRIMARY cover model.
+
+    Head-to-head on a FRESH headline, same production prompt, one attempt each,
+    strict hosted-vision text gate (meta/llama-3.2-90b-vision-instruct):
+    z-image-turbo transcribed the headline EXACT ("Digital Nomad Banking in 2026
+    Wise vs Revolut vs N26"); hidream mangled it ("...Wise vs Revolut v Rett vs
+    N26"); qwen-image painted its own prompt text onto the canvas. Lock the order
+    so a revert to the mangling model is caught here, not on a published cover.
+    """
+    assert publish.CAKE_MODEL == "z-image-turbo"
+    routes = image_routes()
+    assert routes[0]["label"] == "cake-nano/z-image-turbo"
+    assert not any(r["model"] == "hidream" for r in routes)
+
+
 def test_routes_skip_providers_without_a_key(only_fallback):
     routes = image_routes()
     assert [r["label"] for r in routes] == [FALLBACK_IMAGE_MODEL]

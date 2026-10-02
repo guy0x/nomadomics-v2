@@ -90,7 +90,17 @@ ASSET_VERIFY_DELAY_SECONDS = 30.0
 # destroy), or Guy moves the article out of the quarantine class entirely.
 QUARANTINED_DECISIONS = {"quarantine"}
 CAKE_BASE = "https://cake.nano-gpt.com/api/v1"
-CAKE_MODEL = "hidream"
+# Primary cover model. Was `hidream`; z-image-turbo replaced it 2026-10-02
+# (card t_ac50dfce) after a head-to-head on a FRESH headline — same production
+# prompt, one attempt each, strict hosted-vision text gate (NVIDIA
+# meta/llama-3.2-90b-vision-instruct), balance $0.0028:
+#   z-image-turbo -> EXACT, 5.8s      "Digital Nomad Banking in 2026 Wise vs Revolut vs N26"
+#   hidream       -> MANGLED, 21.8s   "…Wise vs Revolut v Rett vs N26"
+#   qwen-image    -> MANGLED, 11.9s   painted the prompt text itself onto the canvas
+# The 19 covers shipped 2026-10-02 were all z-image-turbo and all gate-exact, and
+# the pre-existing hidream set carried duplicated/misspelled headlines (the defect
+# that prompted this swap). Cheap by design: it still rendered on a $0.0028 balance.
+CAKE_MODEL = "z-image-turbo"
 CAKE_SIZE = "1536x1024"
 CAKE_KEY_ENV = "HERMES_CUSTOM_CAKE_NANO_GPT_COM_API_KEY"
 
@@ -102,6 +112,13 @@ CAKE_KEY_ENV = "HERMES_CUSTOM_CAKE_NANO_GPT_COM_API_KEY"
 # OpenAI-compatible route, so cover art now walks an ordered chain and only gives
 # up when every route is unusable. Verified 2026-09-19: nano-banana-2 returns
 # b64_json PNG in ~19s, gpt-image-2 in ~15s, nano-banana returns a data: URL.
+#
+# STATE 2026-10-02 (card t_ac50dfce): this hop is currently a NO-OP. The cheaper
+# key is chat-scoped — its /v1/models lists 3 text models and EVERY image model
+# returns 403 permission_denied ("API key is not allowed to use model"), including
+# nano-banana-2. That is an entitlement, not a balance, so no top-up fixes it; the
+# hop starts working the moment Guy enables image models on that key, with no code
+# change. Until then Cake is the only working route (see CAKE_MODEL above).
 FALLBACK_IMAGE_BASE = "https://api.cheaperinference.com/v1"
 FALLBACK_IMAGE_MODEL = "nano-banana-2"
 FALLBACK_IMAGE_SIZE = "1536x1024"
@@ -593,7 +610,9 @@ def _cover_prompt(title: str) -> str:
 def image_routes() -> list[dict]:
     """Ordered image providers for cover art — only those with a key set.
 
-    Cake Nano HiDream first (Guy's preferred model), then the fallback route.
+    Cake first (z-image-turbo — the gate-verified model), then the cheaper-inference
+    fallback, which is entitlement-gated today (403 on every image model) and only
+    becomes a real hop once Guy enables image models on that key.
     "Key present" is not "key valid": a locked or rotated key is discovered on the
     call itself and the next route takes over.
     """
