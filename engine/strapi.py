@@ -5,6 +5,7 @@ the engine token from .env. No secrets logged. Handles Draft & Publish documents
 from __future__ import annotations
 
 import json
+import urllib.parse
 from typing import Optional
 
 from config import Config
@@ -151,6 +152,25 @@ class StrapiClient:
     # differing only in id/updatedAt), so a limit-sized page wastes half its
     # budget on duplicates — ask for 2x and dedupe.
     _DRAFT_QUERY_PAGE_MULTIPLIER = 2
+
+    def list_published_titles(self, limit: int = 200) -> list[dict]:
+        """Published articles as {slug, title} pairs — the internal-link corpus.
+
+        Used by the write path's internal-link backstop. Returns an empty list
+        on any failure: a missing corpus must degrade to "no links added", never
+        to a crash on an otherwise publishable article.
+        """
+        try:
+            q = urllib.parse.urlencode({
+                "filters[status][$eq]": "published",
+                "sort": "publishedAt:desc",
+                "pagination[pageSize]": str(limit),
+            })
+            rows = self._request("GET", "/api/articles?" + q).get("data", [])
+            return [{"slug": r.get("slug"), "title": r.get("title")}
+                    for r in rows if r.get("slug")]
+        except Exception:  # noqa: BLE001 — no corpus is not a write failure
+            return []
 
     def list_drafts(self, limit: int = 20) -> list[dict]:
         """Working-layer articles awaiting review, one row per document.

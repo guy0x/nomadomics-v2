@@ -43,7 +43,7 @@ from config import Config, load_config, redact
 from editor.editor import edit_draft
 from llm import STAGE_BUDGET_SECONDS
 from research.research import research_topic, validate_research
-from invariants import article_invariant_errors, check_write_invariants, ensure_body_citations
+from invariants import article_invariant_errors, check_write_invariants, ensure_body_citations, ensure_internal_links
 from freshness import freshness_report
 from publish_ledger import LEDGER as PUBLISH_LEDGER
 from publish_ledger import record as record_publish
@@ -859,6 +859,18 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     # can never clear the write check and then be unpublishable forever
     # (live 2026-09-25: 8 non-quarantine in_review rows, 0 with two citations).
     body_markdown = ensure_body_citations(to_score.markdown, research.facts)
+    # Internal-link backstop (2026-10-04): the writer prompt never asks for
+    # internal links, so every new article shipped with none until this was
+    # added. The 09-23..10-01 cohort was fixed by a one-off data pass, which
+    # left this path untouched and the regression recurred on the next publish.
+    # Deterministic, idempotent, never self-links, degrades to a no-op when the
+    # corpus is unavailable. The getattr guard matters: test doubles and any
+    # client predating list_published_titles must not fail an otherwise
+    # publishable article.
+    _corpus_fn = getattr(client, "list_published_titles", None)
+    if _corpus_fn is not None:
+        body_markdown = ensure_internal_links(
+            body_markdown, _corpus_fn(), own_slug=slug_out)
     write_errors = article_invariant_errors(
         {
             "excerpt": seo.excerpt,
