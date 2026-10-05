@@ -865,11 +865,39 @@ def write_slug_snapshot(slugs) -> bool:
     publish drifted it and the gate passed against a stale universe (20 published vs
     15 listed). Writes only when the set actually changed. Best-effort by design:
     a snapshot failure must never fail a publish.
+
+    F-06 root-cause guard (2026-10-05): a slug whose cover PNGs are ABSENT from
+    disk is refused — the QA sweep found cost-of-living-barcelona-digital-nomads
+    ledgered for three days with no cards/og files, because its generate_cover
+    failed non-fatally while the snapshot still recorded the live Strapi set. A
+    ledger entry with no file is not a success: later cover sweeps read the
+    ledger as "already covered" and skip the slug forever. Refused slugs are
+    reported loudly (stderr) instead of being silently dropped.
     """
     try:
         ordered = sorted({s for s in (slugs or []) if s})
         if not ordered:
             return False
+        # Existence gate: both art files must be on disk BEFORE a slug is
+        # allowed into the ledger. This is the only place the snapshot can
+        # distinguish "covered" from "merely published".
+        ghosts = [
+            s for s in ordered
+            if not (PUBLIC_CARDS / f"{s}.png").is_file()
+            or not (PUBLIC_OG / f"{s}.png").is_file()
+        ]
+        if ghosts:
+            for g in ghosts:
+                print(
+                    f"  !! slug snapshot REFUSED {g}: cover art missing from "
+                    f"disk ({PUBLIC_CARDS.name}/{g}.png + {PUBLIC_OG.name}/{g}.png "
+                    "must both exist) — run the cover backfill for it; it stays "
+                    "out of the ledger so no sweep will treat it as covered",
+                    file=sys.stderr,
+                )
+            ordered = [s for s in ordered if s not in set(ghosts)]
+            if not ordered:
+                return False
         payload = json.dumps(ordered, indent=2)
         if SNAPSHOT.exists() and SNAPSHOT.read_text() == payload:
             return False
