@@ -297,3 +297,52 @@ from defect to advisory (structural observation, no measurable CLS harm).
 Pre-batch gate: tag qa-pre-batch1 pinned at 1933489 (rollback reference).
 Constraints honored: no scripts_dev/ execution, no -a/stash/restore, dirty tree
 untouched (still 21 entries), no new credentials, engine venv + env -u PYTHONPATH.
+
+## 2026-10-05 — QA F-06 ROOT CAUSE: slug snapshot ledgered art-less slugs — HEPHAESTUS
+
+**The defect chain (reconstructed from evidence, not inferred):**
+1. 10-04 13:16 — `cost-of-living-barcelona-digital-nomads` published by the 13:00 cron
+   lane (`publish_one`). `generate_cover()` FAILED non-fatally (both PNGs absent).
+2. Same run — `write_slug_snapshot()` ledgered the slug anyway: it was written from
+   the LIVE STRAPI SET with no existence check. The commit `13eea78`-lineage
+   ("feat(frontend): cover art for …") carries snapshot updates from this lane.
+3. Every later backfill sweep (`nomadomics_backfill_covers.py`) read the ledger as
+   "already covered" and skipped the slug → 404 art persisted ~3 days.
+4. The gates that existed checked OTHER directions: `check-images.mjs` compares
+   SNAPSHOT → disk (fails on ghost slugs but nobody invoked it in the cron lane),
+   `test_slug_snapshot.py` pinned write-only-when-changed (no file semantics at all).
+
+**The fix (commit ccb7481):** `write_slug_snapshot()` now refuses any slug whose
+`frontend/public/cards/<s>.png` AND `frontend/public/og/<s>.png` are not BOTH on
+disk. Ghosts print a loud stderr pointer to the backfill tool and are omitted;
+an all-ghost set leaves the snapshot untouched. A ledger entry with no file is
+no longer representable.
+
+**Red→green:** 2 new tests failed on pre-fix code exactly as the defect predicts
+(`test_refuses_slug_with_no_art_on_disk`, `test_refuses_slug_with_only_one_of_two_files`);
+3 existing tests updated to the new contract (fixtures now create real art files —
+fake slugs are now, correctly, refused). Full suite 423 passed / 2 skipped.
+Live proof post-fix: a probe with one real slug + one ghost → ghost REFUSED (stderr),
+real slug ledgered, production ledger restored byte-identical after the probe.
+
+**Corrections to the tasking model (evidence-backed):**
+- NIKE's message said "the gate validates against the ledger and does NOT verify
+  the files exist." Half right: `check-images.mjs` DOES verify files — the real gap
+  was (a) nobody invokes it in the publish lane, and (b) the LEDGER WRITER had no
+  existence check. Fixed at the writer (the only point that can distinguish
+  "covered" from "merely published").
+- 8e3c4b3 (barcelona PNGs) was symptom treatment as charged; it remains necessary
+  (the art is real and live) but the mechanism fix is ccb7481.
+
+**F-03 documentation debt (NIKE's outstanding item):** the fix lives only in
+Strapi (content, not code) — `budgeting-apps-for-digital-nomads` is PRE-BACKSTOP
+RESIDUE: published 2026-10-04T13:00, backstop `1933489` landed 16:19 the same day.
+Changed 0 → 2 internal link targets via the pipeline's own
+`update_article(status="published")`; recorded in the RUNBOOK QA Phase 2 entry
+(committed c0357a8) because issue_log.md did not exist as a file in this repo.
+git cannot hold this change by design (Strapi is the store); RUNBOOK is the
+durable record.
+
+Out of scope, honored: F-05 (CLOSED BY DECISION — hidream-era 675s accepted),
+F-07/F-11 (deferred pending true denominator measurement), F-01 (self-healed,
+no purge — declined in report), F-03 (passes; untouched this round).
