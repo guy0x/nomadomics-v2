@@ -244,3 +244,56 @@ Tests: `engine/tests/test_yearless_slug.py`. Topic slugs in Strapi may contain
 years (the rule applies when the ARTICLE is created).
 
 Kill switch / rollback: none needed — the rule is deterministic and idempotent.
+
+## 2026-10-05 — Nomadomics QA Phase 2 (F-01/F-03/F-06/F-07) — HEPHAESTUS
+
+Gate A passed (NIKE relay, Guy authorized). Implementer lane: HEPHAESTUS.
+ATHENA owns closure — she re-runs each VERIFY_COMMAND against the fixed system.
+
+**F-01 (sitemap omitting cost-of-living-barcelona): SELF-HEALED — no fix applied.**
+Reproduced the VERIFY_COMMAND fresh (cb=15516): sitemap now 56 <loc> WITH barcelona
+(age 61s, new etag 6c22de36…), vs the finding's 54/absent at age 8936s. Stable across
+independent fetches; the slug URL resolves HTTP 200; Strapi published total is now 44
+(finding said 43 — one publish since). The stale ISR render regenerated on its own
+once age passed the revalidate window. Falsification attempt: pushing the pending
+deploy (see F-06) re-renders from cold anyway, so F-01 stays fixed mechanically.
+NO code or config change made. Lesson recorded: a stale-ISR finding needs an
+age-based re-check at implementation time — a CONFIRMED cache finding can expire.
+
+**F-03 (budgeting-apps-for-digital-nomads, 0 internal links): FIXED via the backstop itself.**
+Reproduced: 0 absolute / 0 relative links, live body 8,221 B. Proved the 1933489
+write-path backstop covers this path by running the REAL ensure_internal_links()
+(7/7 backstop tests green) on the REAL live body with the REAL 44-title corpus:
+dry run produced exactly 2 links as a pure suffix ("## Related reading"), diff-identity
+precondition enforced. Applied through the pipeline's own StrapiClient
+update_article(status="published") — the documented explicit-publish API, chosen
+over bare PUT because v5 write-through re-stamps publishedAt (t_60ad2c8e incident).
+Server-side after: relative-targets=2, articles total unchanged at 62, single row
+(no F-02 pair). publishedAt re-stamped 10-04T10:00Z -> 10-05T10:09Z (documented v5
+behavior; disclosed, not hidden). Rollback snapshot: scratch/f03_body_rollback.md.
+Applier: profiles/hephaestus/cache/scratch/fix_f03_internal_links.py.
+
+**F-06 (barcelona cards/og 404): FIXED.** Generated both PNGs via the sanctioned
+nomadomics_backfill_covers.py (cake-nano/z-image-turbo), 1200x630 (IHDR-verified),
+headline gate PASSED (vision transcription exact: "Cost of Living in Barcelona for
+Digital Nomads"). Committed surgically: 8e3c4b3, explicit paths only, none of the 21
+dirty entries touched. Pushed 13eea78..8e3c4b3 -> Vercel deploy (this also ships the
+previously unpushed backstop commit 1933489; frontend build content unchanged except
+the two PNGs). Post-deploy asset checks: to be re-run by ATHENA at closure.
+
+**F-07 (3 of 4 <img> lack width/height): REFUTED AS A DEFECT — outcome-level evidence.**
+Reproduced the STRUCTURAL claim (1 of 4 has dimensions — the hero; 3 related-card
+images emit none) but falsified the HARM claim with a real PerformanceObserver
+layout-shift measurement on the live page (buffered observer, full load + scroll):
+CLS = 0.0000, zero shift events. Mechanism: ArticleCard uses next/image fill inside
+an aspect-[16/9] container — Next's own space-reserving pattern; width/height props
+are INVALID API on fill images. No change made; recommend ATHENA reclassify F-07
+from defect to advisory (structural observation, no measurable CLS harm).
+
+**F-02: NOT TOUCHED (Guy resolved: intentional v4 draft/publish pairs).**
+**F-05 (cards/ bimodality): NOT TOUCHED — goal-prompt §8 bars it from this exercise
+(separate Tier-2 finding).**
+
+Pre-batch gate: tag qa-pre-batch1 pinned at 1933489 (rollback reference).
+Constraints honored: no scripts_dev/ execution, no -a/stash/restore, dirty tree
+untouched (still 21 entries), no new credentials, engine venv + env -u PYTHONPATH.
