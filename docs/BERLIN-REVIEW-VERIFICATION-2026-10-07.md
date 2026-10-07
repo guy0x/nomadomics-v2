@@ -34,3 +34,12 @@
 ## Audit result (draft layer, 2026-10-07 11:2x)
 
 24/24 acceptance checks PASS: AB €113, D-Ticket €63, zone C, ABC €5.00, single €4.00/Kurzstrecke €2.80, home-office €1,260/210d, Museumssonntag ended, free Thursdays, BVG all-tickets URL, statistik source, inflation 3.4% fuel, semester €34.80, uni-only eligibility, no Outsite/NomadList, no Factory, Betahaus €25–35, Markthalle Neun, metaTitle contains keyword (56 chars), H1/metaTitle aligned, 1,765 words (≥1,600), internal links intact.
+
+## Live-render re-verification (t_f42da8f6, 2026-10-07 11:42 IDT / 08:42Z)
+
+Re-verified against LIVE deployed HTML after republish, not the draft. Both hosts fetched 2026-10-07T08:36:47Z:
+- https://www.nomadomics.blog/cost-of-living-berlin-digital-nomads → 200 (86,615 B)
+- https://nomadomics-v2.vercel.app/cost-of-living-berlin-digital-nomads → 200 (86,615 B)
+- Byte-identical (sha256 47c0d8fe7735120fab2d11856f6aac66c6c99c4156de9eb4ac820da5b5eb0cfe).
+
+**Result: 24/24 PASS on the live render.** Correct figures confirmed in live prose: €113 AB monthly; €63 D-Ticket "as of 2026"; zone C (Potsdam); ABC single €5.00; AB single €4.00 / Kurzstrecke €2.80; home-office €6/day → €1,260/210d; Museumssonntag ended December 2024 + free first-Thursday 4–8 pm (Hamburger Bahnhof, Neue Nationalgalerie); inflation 3.4% y/y Sep 2026 fuel-driven; Deutschlandsemesterticket €34.80/mo, enrolled-university only; Betahaus €25–35; Markthalle Neun. Pre-fix figures absent: €86, €2.20, €600-as-home-office-cap (the only live "600" values are co-living rents €600–€800, unrelated), any Factory Berlin claim. Links: bvg.de all-tickets 200; statistik-berlin-brandenburg 200; coliving.com/berlin → 308→200; numbeo present; /cash-vs-card-abroad and /budgeting-apps-for-digital-nomads 200 on both hosts (with/without slash); ≥2 internal article links (5 found, all 200). Structural: single <h1>; canonical = www host; <title> 60 chars (contains keyword); BlogPosting JSON-LD present (block contains slug + article URL); /cards/<slug>.png and /og/<slug>.png 200 both hosts; sitemap.xml contains the article URL. Closure: ATHENA owns closure — re-verification complete, no reportable failures (evidence JSON: t_f42da8f6 attachment).
