@@ -150,6 +150,55 @@ def body_citation_urls(body: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"https://[^\s)>\]\"]+", body or "")))
 
 
+# ---- Link hygiene (QA: Guy 2026-10-05) ------------------------------
+# Every link must be a proper `[anchor](url)` hyperlink woven into natural
+# prose. The corpus historically shipped three violations the frontend renders
+# as broken/garbage: bare URLs dropped into prose, URLs wrapped in parens as
+# plain text (not markdown links), and hyphenated-slug anchors that point to
+# the wrong target (e.g. an internal slug anchor href'd to an external host).
+_RAW_URL_RE = re.compile(r"https?://[^\s\)\]\u3011\u300d\u3000\"'<>]+")
+_SLUG_ANCHOR_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)+$")
+
+
+def link_hygiene_issues(body: str) -> list[str]:
+    """Named QA failures for a body's internal/external links.
+
+    Flags four shapes the frontend cannot render as sane hyperlinks:
+
+      * RAW URL     — an ``http(s)://`` token that appears in prose *not*
+                      inside a markdown link. Renders as a bare text URL.
+      * PAREN URL   — an ``http(s)://`` wrapped in ``( )`` as plain text
+                      without the ``[...](...)`` markdown form.
+      * SLUG ANCHOR — a markdown link whose visible anchor is a hyphenated
+                      lowercase slug (``[best-esim-plans-for-digital-nomads]``)
+                      instead of natural text.
+      * WRONG-DOMAIN — a slug-anchor link whose href is an *internal* slug
+                      pattern aimed at an external host (e.g. a Nomadonics
+                      article slug link to ``https://nomadlist.com``).
+    """
+    body = body or ""
+    issues: list[str] = []
+    for m in _MD_LINK.finditer(body):
+        anchor = m.group(1).strip()
+        url = m.group(2).strip()
+        if _SLUG_ANCHOR_RE.match(anchor):
+            dom = urlparse(url).hostname or ""
+            flag = "wrong-domain" if re.match(r"https?://", url) and not re.match(
+                r"(?:www\.)?nomadomics\.(?:com|blog)$", dom
+            ) else "slug-anchor"
+            issues.append(f"link-anchor [{anchor}] -> {url} ({flag})")
+    # mask markdown links so bare-URL detection only sees prose
+    prose = _MD_LINK.sub("", body)
+    for m in _RAW_URL_RE.finditer(prose):
+        before = prose[max(0, m.start() - 1):m.start()]
+        prev = prose[max(0, m.start() - 4):m.start()]
+        if prev and prev.rstrip().endswith("("):
+            issues.append(f"paren-url {m.group(0)[:80]}")
+        else:
+            issues.append(f"raw-url {m.group(0)[:80]}")
+    return issues
+
+
 def _fact_source(fact) -> tuple[str, str]:
     """(url, title) of a research fact, whether dataclass or dict."""
     if isinstance(fact, dict):
