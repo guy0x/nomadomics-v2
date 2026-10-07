@@ -129,11 +129,35 @@ class StrapiClient:
         observed 07:32 write kept the service-stamped time), so a timestamp can
         never be restored by sending one. Set real publish state only via
         ``status="published"``.
+
+        The `status` KEY inside `fields` is a different thing entirely — the
+        article's own app-level enum (draft/in_review/published/rejected), which
+        the frontend filters listings on. It does NOT control the draft&publish
+        layer: sending ``{"status": "in_review"}`` through a write-through PUT
+        leaves the document PUBLISHED (and re-stamps `publishedAt`) while the
+        site hides it (verified live 2026-10-07 08:11Z, t_8e96e368 — the write
+        meant to unpublish the Berlin article re-published it). The engine token
+        also cannot retract a published layer: POST
+        .../actions/unpublish -> 405, content-manager routes -> 404, and a null
+        `publishedAt` in the payload is ignored. So a withdrawal is expressed as
+        an app-status change on the DRAFT layer, which must be requested
+        explicitly. A write-through (`status=None`) that carries a non-published
+        app status is therefore refused below rather than silently shipping.
         """
         if status not in self._ARTICLE_WRITE_STATUSES:
             raise ValueError(
                 f"update_article: status must be one of "
                 f"{self._ARTICLE_WRITE_STATUSES!r}, got {status!r}"
+            )
+        app_status = fields.get("status")
+        if status is None and app_status is not None and str(app_status) != "published":
+            raise ValueError(
+                f"update_article: refusing a write-through PUT that sets the "
+                f"app-level status to {app_status!r}. On v5 a PUT with no "
+                f"?status= writes the PUBLISHED layer and re-stamps publishedAt, "
+                f"so this would re-publish the document instead of withdrawing "
+                f"it; pass status='draft' to change app state on the working "
+                f"layer (see the docstring)."
             )
         params = {"status": status} if status else None
         return self._request(

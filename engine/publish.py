@@ -214,12 +214,28 @@ DRAFT_QUERY_PAGE_MULTIPLIER = 2
 def _candidate_rank(article: dict, layer: str) -> tuple:
     """Order two copies of the same document; the largest rank wins.
 
-    1. an `in_review` copy outranks a stale mirror of the other layer,
-    2. then the freshest `updatedAt` (the working copy holds the newest body —
+    1. a QUARANTINE copy wins outright (t_8e96e368, fail-closed union). The two
+       layers can disagree: the documented quarantine write (`?status=draft`)
+       stamps the WORKING layer while the published mirror keeps its older
+       `topicDecision`, and the gate reads whichever copy wins here. Ordering by
+       freshness first made the gate depend on `updatedAt` — and a write-through
+       PUT re-stamps the PUBLISHED row (verified live 2026-10-07 08:11Z: Berlin's
+       published `publishedAt`/`updatedAt` moved to 08:11:06 while the draft row
+       already carried quarantine, i.e. the mirror can be the fresher copy).
+       Ranking quarantine first means: if EITHER copy says quarantine, the
+       document is quarantined. Nothing can be released by this rule — release
+       still requires the `--release` approval ledger, which `is_quarantined()`
+       checks before either field.
+    2. an `in_review` copy outranks a stale mirror of the other layer,
+    3. then the freshest `updatedAt` (the working copy holds the newest body —
        every lane write since the 2026-09-22 write-layer fix lands there),
-    3. then the draft layer, the lane's own working copy.
+    4. then the draft layer, the lane's own working copy.
     """
     return (
+        1
+        if str(article.get("topicDecision") or "").strip().lower()
+        in QUARANTINED_DECISIONS
+        else 0,
         1 if str(article.get("status") or "") == "in_review" else 0,
         str(article.get("updatedAt") or ""),
         1 if layer == DRAFT_LAYER else 0,

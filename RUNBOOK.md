@@ -70,6 +70,30 @@ owns that column and ignores the value you send, so a timestamp mangled by an
 accidental republish cannot be set back by including `publishedAt` in `fields`.
 Change publish state only via `status="published"`.
 
+**The `status` KEY inside the payload is a different thing (t_8e96e368,
+2026-10-07).** It is the article's own app-level enum
+(`draft`/`in_review`/`published`/`rejected`), and it is what the frontend filters
+on (`filters[status][$eq]=published`). It does **not** control the draft&publish
+layer, and setting it to a non-published value does **not** unpublish:
+
+- The engine token cannot retract a published layer at all: `POST
+  /api/articles/<docId>/actions/unpublish` → 405, content-manager action routes →
+  404, and a null `publishedAt` in the payload is ignored.
+- Sending `{"status": "in_review"}` through a **write-through** PUT therefore
+  re-publishes the document (fresh `publishedAt`, both rows stamped) while the
+  site merely stops listing it. Verified live 2026-10-07T08:11:06Z: the write
+  meant to unpublish `cost-of-living-berlin-digital-nomads` did exactly that, and
+  the article stayed in the published layer.
+- A withdrawal is expressed as an app-status change **on the draft layer**, which
+  must be requested explicitly (`status="draft"`).
+  `StrapiClient.update_article` now REFUSES a write-through (`status=None`) whose
+  payload sets a non-published app status, so the combination cannot be reached
+  by accident again.
+- `list_in_review()` unions both layers, so the two copies of a document can
+  disagree; the union now ranks a QUARANTINE copy first (fail-closed) instead of
+  letting `updatedAt` freshness decide, since a write-through PUT re-stamps the
+  published mirror's `updatedAt` and can make it the fresher copy.
+
 Regression coverage: `engine/tests/test_article_write_layer.py`. The live test
 writes to the local Strapi and is opt-in:
 
@@ -346,3 +370,78 @@ durable record.
 Out of scope, honored: F-05 (CLOSED BY DECISION — hidream-era 675s accepted),
 F-07/F-11 (deferred pending true denominator measurement), F-01 (self-healed,
 no purge — declined in report), F-03 (passes; untouched this round).
+
+## 2026-10-07 — auto-publish routing defect: app status ≠ publish layer (t_8e96e368) — HEPHAESTUS
+
+Investigation of "the Berlin article was auto-published despite being `in_review`".
+No article was changed or unpublished by this work; all probes are read-only.
+
+**1. The premise is inverted — `in_review` was a LATER state, not the publish gate that failed.**
+`cost-of-living-berlin-digital-nomads` (`slvs6a8atlt276fdkpabgt4z`) was created AND
+published in one step by the DRAFT lane's Ratified-E AUTO_PUBLISH branch:
+`engine/state/pipeline.jsonl:221` (`article_created`, `decision=auto_publish`,
+`confidence=84`, `published=true`, `2026-10-06T06:04:54Z`), `publish-ledger.jsonl:18`
+(`lane=draft`), and `logs/strapi-service.log:5083`
+(`PUT …?status=published`, 2026-10-06 09:04:41 local). It only became `in_review` the
+next day, at 11:00:25 local, from the quarantine decision (t_e5384cee). Nothing
+reached production *through* an `in_review` gate.
+
+**2. Root cause A — the sensitive-topic gate keys off the TOPIC CATEGORY, not the content.**
+`apply_policy(sensitive=is_sensitive(topic["category"]))`; the Berlin topic's category is
+`geoarbitrage`, which is not in `SENSITIVE_TOPICS` and does not substring-match
+tax/legal/medic/visa/bank. The article's body carried tax advice (home-office flat rate,
+freelancer deductions, surcharge/church tax) and banking recommendations — the post-hoc
+audit (t_5818bb2a) classified it QUARANTINED. A cost-of-living/geoarbitrage piece with
+substantive tax or banking content is a category blind spot that auto-publishes.
+
+**3. Root cause B — app-level `status` and the draft&publish layer are independent, and the withdrawal was performed as a write-through PUT.**
+`logs/strapi-service.log:6118`: `[2026-10-07 11:11:06.486] PUT
+/api/articles/slvs6a8atlt276fdkpabgt4z` — **no `?status=`** — 200, ~4 minutes after a
+sibling worker had verified the published layer's stamps were unchanged. That PUT moved
+the published layer's `publishedAt` from `2026-10-06T06:04:41.458Z` to
+`2026-10-07T08:11:06.465Z`: the write meant to unpublish the article **re-published** it.
+`count_published()` 46→45 only because the frontend filters
+`filters[status][$eq]=published`; the published-layer row is still there.
+Actor: no worker artefact issued that PUT (the t_ed813311 run ended 11:10:39 and had
+already verified the stamps unchanged); the two preceding 400s (11:10:33, 11:10:54) and
+an interactive TUI session opened at 11:10:28 read as a hand-run withdrawal attempt, and
+card t_0e3aa733 — authored 11:12:10 — carries exactly that observation ("status set to
+in_review; publishedAt re-stamped 2026-10-07T08:11Z").
+
+Estate measurement (read-only, live Strapi): the published layer holds **64 documents,
+only 45 with app status `published`** — 19 rows (30%) sit in the published layer while
+carrying `in_review` (8, four of them quarantine-class), `draft` (5), or `rejected` (5).
+Every consumer in the frontend (`strapi.ts:81/89/115`, sitemap, feed) hard-filters on the
+app status, so the site is *accidentally* correct: the filter, not the layer state, is
+what hides an unpublished article. Any consumer that reads the published layer without
+that filter (raw `/api/articles`, admin API, a partner feed, a future route) serves them.
+
+**4. Root cause C (latent) — the 13:00 lane's two-layer union could drop a quarantine flag.**
+`list_in_review()` unions the published and draft layers and keeps the winner of
+`_candidate_rank`, which was keyed on freshness (`updatedAt`) — and a write-through PUT
+re-stamps the *published* mirror, making it the fresher copy. A quarantined draft copy
+plus a stale-flagged but fresher published mirror therefore merged into a
+non-quarantined candidate. `is_quarantined()` reads the merged row, so the gate could be
+bypassed. Not exploited today: a live check found **0 documents currently losing a flag**
+(the journal join covered the disagreements), so this is a hardening, not a lived incident.
+
+**Fixes (this card):**
+- `engine/publish.py::_candidate_rank` — quarantine ranks FIRST, so if either copy says
+  quarantine the document is quarantined (fail-closed). Release is unaffected: the
+  `--release` approval ledger is still checked before either field.
+- `engine/strapi.py::update_article` — refuses a write-through (`status=None`) whose
+  payload sets a non-published app status, with the reason inline.
+- Tests: `test_publish_layer_union.py::test_quarantine_flag_survives_a_fresher_published_mirror`,
+  `test_article_write_layer.py::test_write_through_cannot_change_the_app_status` +
+  `…_draft_layer_app_status_change_is_allowed`.
+
+**Red→green:** with the pre-fix rank the same scenario merges to the published mirror
+(`topicDecision=None`) and `is_quarantined` returns **False**; with the fix the quarantined
+draft copy wins and it returns **True** (`red_green_rank.py`, in-process, no Strapi
+traffic). Full engine suite: **434 passed, 2 skipped**.
+
+**Recommended next (not built here, needs a decision):** a read-only publish-layer drift
+invariant in `nomadomics_content_invariants` that fails when published-layer rows carry a
+non-published app status, so the 19-row drift cannot grow unnoticed; and either an
+admin-side unpublish step in the release runbook or content-level sensitivity detection
+(body scan) in place of the category-only `is_sensitive()`.

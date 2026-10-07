@@ -115,6 +115,28 @@ def test_status_none_omits_the_param_and_writes_through():
     assert http.calls[-1]["params"] is None
 
 
+def test_write_through_cannot_change_the_app_status():
+    """A withdrawal is a DRAFT-layer write (t_8e96e368).
+
+    Through a write-through PUT the same payload leaves the document published
+    and re-stamps `publishedAt` — verified live 2026-10-07T08:11:06Z, the write
+    meant to unpublish the Berlin article re-published it. Refuse the
+    combination before any request instead.
+    """
+    client, http = make_client()
+    with pytest.raises(ValueError):
+        client.update_article("doc-1", {"status": "in_review"}, status=None)
+    assert http.calls == []
+
+
+def test_draft_layer_app_status_change_is_allowed():
+    """The withdrawal path itself stays open: `?status=draft` (the default)."""
+    client, http = make_client()
+    client.update_article("doc-1", {"status": "in_review"}, status="draft")
+    assert http.calls[-1]["params"] == {"status": "draft"}
+    assert http.calls[-1]["json"] == {"data": {"status": "in_review"}}
+
+
 def test_publishedat_in_the_payload_is_not_a_publish_mechanism():
     """v5 ignores an explicit `publishedAt` (the document service owns it), so a
     timestamp can never be restored by payload — only `status="published"`

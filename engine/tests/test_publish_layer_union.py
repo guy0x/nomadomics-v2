@@ -162,6 +162,36 @@ def test_list_in_review_is_confidence_sorted_and_capped():
     assert [a["slug"] for a in out] == ["high", "mid"]
 
 
+def test_quarantine_flag_survives_a_fresher_published_mirror():
+    """t_8e96e368: the two layers can disagree and the gate reads the winner.
+
+    The documented quarantine write (`?status=draft`) stamps the WORKING layer;
+    a write-through PUT re-stamps the PUBLISHED row (Berlin, 2026-10-07 08:11Z —
+    published `publishedAt`/`updatedAt` moved to 08:11:06 with the stale
+    `topicDecision` still on it). Freshness-first ranking would therefore adopt
+    the mirror and drop the quarantine flag. Ranking quarantine first makes the
+    union fail closed.
+    """
+    client = FakeClient(
+        published_rows=[
+            row("tax-guide", "d1", confidence=95, layer="pub",
+                updated_at="2026-10-07T08:11:06.000Z"),
+        ],
+        draft_rows=[
+            row("tax-guide", "d1", confidence=95, layer="draft",
+                updated_at="2026-10-06T06:04:00.000Z", decision="quarantine"),
+        ],
+    )
+
+    out = list_in_review(client)  # type: ignore[arg-type]
+    assert out[0]["topicDecision"] == "quarantine"
+
+    result = publish.publish_one(client, None, dry_run=True)  # type: ignore[arg-type]
+    assert result["event"] == "skip"
+    assert "quarantined (skipped)" in result["reason"]
+    assert client.updates == []
+
+
 # --- the gates still hold ----------------------------------------------------
 
 def test_draft_layer_only_eligible_article_becomes_candidate():
