@@ -53,3 +53,8 @@
 - Final visual QA inspected all 7 changed files: 7/7 pass with no overlaid headline/text, watermark, or logo; the initial Barcelona bottom-right concern was crop-inspected and confirmed normal railing detail, not a watermark.
 - Shipped in image/gate commit `09a2a9d`; production cache-busted verification against Vercel deployment commit `4d4de2b` (`?cb=4d4de2b`) returned HTTP 200 and exact local-byte matches for all 7/7 changed URLs: 459602, 430074, 479111, 460957, 452715, 450196, and 430778 bytes respectively.
 
+## 2026-10-10 — Employer case-study MVP release
+- Added the employer-facing `/case-study/nomadomics` page, navigation and sitemap links, and the evidence docs `docs/EMPLOYER-MVP.md` and `docs/CASE-STUDY-NOMADOMICS.md`, sourced from the 2026-10-09 audit snapshot `20261009_111004_bb2a52ce`.
+- Frontend tests (24), lint, and production build passed. Commit `3cb620d` was pushed to `origin/main`; the Git-triggered deployment was blocked by commit-author permissions, so the authenticated Vercel CLI deployment `nomadomics-v2-kx62jim7c-nomads4.vercel.app` was used.
+- Cache-busted production verification passed: `https://www.nomadomics.blog/case-study/nomadomics`, `/sitemap.xml`, and `/` all returned HTTP 200; the case-study route appears in the live sitemap and homepage navigation.
+
