@@ -37,3 +37,11 @@
 - External deployment verified: `https://nomadomics-v2.vercel.app/` returned HTTP 200 and all 66 card/OG URLs matched local bytes when fetched with cache-busting `?cb=7d7f3f7` (66/66 matches, 0 errors). A cache-hit request without the query briefly served old bytes; use the commit cache-buster for verification while CDN expiry catches up.
 - Evidence: task workspace `postprocess_33_result.json`, `vision_qa_33.json`, `vision_retry_budget.txt`, `frontend-build.log`; raw/staged batch state under the profile cache scratch directory.
 
+## 2026-10-10 — Production article disappearance: Strapi tunnel outage and fail-open build
+- Reproduced on `https://www.nomadomics.blog/`: homepage returned HTTP 200 but rendered `Guides 0`; published article routes returned 404; the same failure was present on `https://nomadomics-v2.vercel.app/`.
+- Root cause: `frontend/src/lib/strapi.ts` converted every Strapi error into `null`, so a Vercel build could succeed with zero articles. `generateStaticParams()` then received an empty list and emitted no article routes.
+- The public Strapi origin was also unavailable: `strapi.nomadomics.blog` returned Cloudflare 530/1033 while the existing `com.nomadomics.cloudflared` LaunchAgent was unloaded. Local Strapi/PostgreSQL were healthy, but Vercel could not reach `localhost:1337`.
+- Recovery: loaded the existing cloudflared LaunchAgent; tunnel connector registered and authenticated public API returned HTTP 200 with 48 published articles. No Strapi content or publication state changed.
+- Prevention: changed the data layer to fail closed in production/Vercel; `STRAPI_FAIL_SOFT=1` remains an explicit development-only opt-in. A CMS outage now fails deployment instead of shipping an empty site.
+- Verification: frontend tests 24/24 passed; public-API build generated 70/70 static pages including 48 article routes. Vercel redeploy still required to replace the currently cached empty deployment.
+

@@ -50,11 +50,18 @@ interface StrapiListResponse<T> {
 }
 
 /**
- * Fail-soft fetch: returns null when Strapi is unreachable or errors out
- * (e.g. during CI/Vercel builds where no CMS is reachable). Callers treat
- * null as "no content yet" and render empty state — the build must never die
- * because the CMS is offline. ISR will pick content up on the next revalidate.
+ * Fetch from Strapi without silently deleting the site when the CMS is down.
+ *
+ * Production/Vercel builds fail closed: an unavailable or unauthorized CMS must
+ * stop the deployment rather than generating a valid-looking site with zero
+ * articles. Local developers can explicitly opt into the old empty-state
+ * behavior with STRAPI_FAIL_SOFT=1 during development only.
  */
+const ALLOW_EMPTY_STATE =
+  process.env.STRAPI_FAIL_SOFT === "1" &&
+  process.env.NODE_ENV !== "production" &&
+  process.env.VERCEL !== "1";
+
 async function strapiFetch<T>(path: string, revalidate = REVALIDATE): Promise<T | null> {
   try {
     const res = await fetch(`${STRAPI_URL}${path}`, {
@@ -65,12 +72,24 @@ async function strapiFetch<T>(path: string, revalidate = REVALIDATE): Promise<T 
       next: { revalidate },
     });
     if (!res.ok) {
-      console.warn(`[strapi] ${path} -> ${res.status}; rendering empty state`);
+      const message = `[strapi] ${path} -> ${res.status}`;
+      if (!ALLOW_EMPTY_STATE) {
+        throw new Error(`${message}; refusing to render an empty state`);
+      }
+      console.warn(`${message}; rendering empty state (STRAPI_FAIL_SOFT=1)`);
       return null;
     }
     return (await res.json()) as T;
   } catch (err) {
-    console.warn(`[strapi] ${path} unreachable (${String(err)}); rendering empty state`);
+    if (!ALLOW_EMPTY_STATE) {
+      if (err instanceof Error && err.message.includes("refusing to render an empty state")) {
+        throw err;
+      }
+      throw new Error(`[strapi] ${path} unreachable; refusing to render an empty state`, {
+        cause: err,
+      });
+    }
+    console.warn(`[strapi] ${path} unreachable (${String(err)}); rendering empty state (STRAPI_FAIL_SOFT=1)`);
     return null;
   }
 }
