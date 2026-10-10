@@ -45,3 +45,11 @@
 - Prevention: changed the data layer to fail closed in production/Vercel; `STRAPI_FAIL_SOFT=1` remains an explicit development-only opt-in. A CMS outage now fails deployment instead of shipping an empty site.
 - Verification: frontend tests 24/24 passed; public-API build generated 70/70 static pages including 48 article routes. Vercel redeploy still required to replace the currently cached empty deployment.
 
+## 2026-10-10 — Final published cover byte-cap enforcement (HEPHAESTUS, t_b40af80c)
+- Cap semantics: the existing post-process script documents a 500 KiB working cap (`500 * 1024`), but the final published-asset gate is stricter: every published card and OG PNG must be `<=500,000` bytes. `frontend/scripts/check-images.mjs` now fails closed on any published asset over that byte cap; orphan assets remain retained and out of scope.
+- Re-encoded exactly 7 oversized published assets with `pngquant` quality `60-88`, preserving dimensions: cards `cost-of-living-barcelona-digital-nomads` 510454→459602, `cost-of-living-buenos-aires-digital-nomads` 501660→430074, `cost-of-living-ho-chi-minh-city-nomads` 550844→479111, `cost-of-living-mexico-city` 505836→460957, `nomad-health-insurance-guide` 539786→452715; OG `cost-of-living-ho-chi-minh-city-nomads` 519718→450196, `nomad-health-insurance-guide` 506911→430778 bytes.
+- Final local inventory: 48 published cards and 48 published OGs, 0 over `500,000` bytes; 14 card and 14 OG orphans remain untouched. No article publication state changed and no orphan files were deleted.
+- Verification: `cd frontend && npm run check:images` passed (48 published slugs, 62 card and 62 OG files); `npm run build` passed with 70/70 static pages, 0 Strapi 500s, and 0 empty-state fallbacks. Local Strapi `/admin` returned HTTP 200; production homepage and changed article returned HTTP 200.
+- Final visual QA inspected all 7 changed files: 7/7 pass with no overlaid headline/text, watermark, or logo; the initial Barcelona bottom-right concern was crop-inspected and confirmed normal railing detail, not a watermark.
+- Shipped in image/gate commit `09a2a9d`; production cache-busted verification against Vercel deployment commit `4d4de2b` (`?cb=4d4de2b`) returned HTTP 200 and exact local-byte matches for all 7/7 changed URLs: 459602, 430074, 479111, 460957, 452715, 450196, and 430778 bytes respectively.
+
