@@ -5,10 +5,11 @@
  * For every published article slug, assert that both:
  *   - frontend/public/cards/<slug>.png   (card)
  *   - frontend/public/og/<slug>.png      (OG share image)
- * exist, and that no slug carries a year (the engine's `_yearless_slug` rule).
+ * exist, are no larger than 500,000 bytes, and no slug carries a year (the
+ * engine's `_yearless_slug` rule).
  *
- * Exit 0 when clean, exit 1 when anything is missing or a year-bearing slug or
- * year-bearing image filename is found. Run it in CI after publishing or after
+ * Exit 0 when clean, exit 1 when anything is missing, over cap, or a
+ * year-bearing slug or year-bearing image filename is found. Run it in CI after
  * generating new cover art:
  *
  *   node scripts/check-images.mjs              # snapshot slugs (offline)
@@ -28,6 +29,7 @@ const OG_DIR = join(ROOT, "public", "og");
 const SNAPSHOT = join(dirname(fileURLToPath(import.meta.url)), "published-slugs.json");
 
 const YEAR_RE = /\b20\d{2}\b/;
+const MAX_PUBLISHED_IMAGE_BYTES = 500_000;
 
 function parseArgs(argv) {
   const args = { live: false, slugsFile: null };
@@ -53,6 +55,10 @@ async function fetchPublishedSlugs() {
 function listPng(dir) {
   if (!existsSync(dir)) return new Set();
   return new Set(readdirSync(dir).filter((f) => f.endsWith(".png")));
+}
+
+function byteSize(dir, filename) {
+  return readFileSync(join(dir, filename)).byteLength;
 }
 
 function main() {
@@ -85,6 +91,14 @@ function report(slugs, source) {
   const missingCards = slugs.filter((s) => !cards.has(`${s}.png`));
   const missingOgs = slugs.filter((s) => !ogs.has(`${s}.png`));
   const yearSlugs = slugs.filter((s) => YEAR_RE.test(s));
+  const overCapCards = slugs
+    .filter((s) => cards.has(`${s}.png`))
+    .map((s) => [s, byteSize(CARDS_DIR, `${s}.png`)]);
+  const overCapOgs = slugs
+    .filter((s) => ogs.has(`${s}.png`))
+    .map((s) => [s, byteSize(OG_DIR, `${s}.png`)]);
+  const failedCapCards = overCapCards.filter(([, bytes]) => bytes > MAX_PUBLISHED_IMAGE_BYTES);
+  const failedCapOgs = overCapOgs.filter(([, bytes]) => bytes > MAX_PUBLISHED_IMAGE_BYTES);
 
   console.log(`check-images: ${slugs.length} published slugs (source: ${source})`);
   console.log(`  cards: ${cards.size} files · og: ${ogs.size} files`);
@@ -104,6 +118,15 @@ function report(slugs, source) {
     problems += yearSlugs.length;
     console.log(`  YEAR-BEARING slugs (${yearSlugs.length}):`);
     for (const s of yearSlugs) console.log(`    - ${s}`);
+  }
+  if (failedCapCards.length || failedCapOgs.length) {
+    const failedCapCount = failedCapCards.length + failedCapOgs.length;
+    problems += failedCapCount;
+    console.log(`  OVER CAP (${failedCapCount}; max ${MAX_PUBLISHED_IMAGE_BYTES} bytes):`);
+    for (const [s, bytes] of failedCapCards)
+      console.log(`    - /cards/${s}.png (${bytes} bytes)`);
+    for (const [s, bytes] of failedCapOgs)
+      console.log(`    - /og/${s}.png (${bytes} bytes)`);
   }
 
   // Orphans / year-bearing filenames aren't fatal but worth surfacing.
