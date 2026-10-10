@@ -25,6 +25,7 @@ export async function GET() {
     { url: SITE_URL, changeFrequency: "daily" as const, priority: 1 },
     { url: `${SITE_URL}/about`, changeFrequency: "monthly" as const, priority: 0.3 },
     { url: `${SITE_URL}/privacy`, changeFrequency: "yearly" as const, priority: 0.3 },
+    { url: `${SITE_URL}/case-study/nomadomics`, changeFrequency: "monthly" as const, priority: 0.5 },
     ...CATEGORIES.map((c) => ({
       url: `${SITE_URL}/category/${c.slug}`,
       changeFrequency: "weekly" as const,

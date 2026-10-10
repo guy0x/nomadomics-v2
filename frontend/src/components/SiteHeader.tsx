@@ -59,6 +59,12 @@ export default function SiteHeader() {
 
         <div className="flex items-center gap-2">
           <Link
+            href="/case-study/nomadomics"
+            className="hidden rounded-md px-3 py-2 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-50 hover:text-ink-950 lg:inline-block"
+          >
+            Project
+          </Link>
+          <Link
             href="/category/banking"
             className="hidden rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700 md:inline-block"
           >
@@ -94,6 +100,14 @@ export default function SiteHeader() {
                 </Link>
               </li>
             ))}
+            <li className="border-b border-ink-100">
+              <Link
+                href="/case-study/nomadomics"
+                className="flex min-h-[44px] items-center text-base font-medium text-ink-800 hover:text-brand-700"
+              >
+                Project case study
+              </Link>
+            </li>
             <li className="py-3">
               <Link
                 href="/category/banking"

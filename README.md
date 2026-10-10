@@ -1,19 +1,40 @@
-# Nomadomics 2.0 — AI-powered nomad finance platform
+# Nomadomics — AI-assisted editorial operating system
 
-A semi-automated content engine for digital nomads and travelers.
+Nomadomics is an operational MVP for researching, structuring, reviewing,
+publishing, and refreshing practical guides for people who earn in one currency
+and live in another.
+
+## Employer-facing proof
+
+- Live product: https://www.nomadomics.blog
+- Public project case study: `/case-study/nomadomics` on the frontend
+- Employer MVP brief: [`docs/EMPLOYER-MVP.md`](docs/EMPLOYER-MVP.md)
+- Canonical evidence: [`docs/CASE-STUDY-NOMADOMICS.md`](docs/CASE-STUDY-NOMADOMICS.md)
 
 ## Stack
-- Hermes Agent (orchestrator)
-- Strapi v5 + MCP (CMS, self-hosted on Hetzner VPS)
-- Next.js 15 + Tailwind + shadcn/ui (frontend, Vercel)
-- PostgreSQL (database)
-- Notion (tracking: topic queue, costs, decisions, analytics)
 
-## Status
-Phase 0 in progress. See ~/.hermes/plans/2026-07-13_093000-nomadomics-superplan.md for full roadmap.
+- Content engine: research, drafting, editorial QA, and workflow orchestration
+- Strapi 5 + MCP: structured CMS content and review state
+- Next.js 16 + Tailwind: public frontend, SEO, and sitemap surfaces
+- PostgreSQL: CMS content store
+- Vercel: frontend deployment target
 
-## Directory layout
-- `reference/wp-articles/` — exported WordPress corpus (markdown)
-- `scripts/` — conversion + automation scripts
-- `engine/writer/prompts/` — voice exemplar + writer prompts
-- Notion: "Nomadomics Project Hub - Master Knowledge Base" (workspace)
+## Operating loop
+
+`research → brief → draft → edit → SEO/policy → CMS review → publish → QA/freshness`
+
+The publish path includes citation/invariant checks, internal-link handling,
+sensitive-topic quarantine, human review controls, and generated cover/Open Graph
+assets. Search Console feedback is the next integration, not a current claim.
+
+## Verification
+
+```bash
+cd frontend
+npm test
+npm run lint
+npm run build
+```
+
+The Strapi backend has its own build and LaunchAgent lifecycle; see `RUNBOOK.md`
+for operations.
