@@ -9,7 +9,7 @@ Nomadomics is an AI-assisted editorial operating system: it turns a reader probl
 ## Public proof
 
 - Product: https://www.nomadomics.blog
-- Project case study: `/case-study/nomadomics` on the public site after deployment
+- Project case study: https://www.nomadomics.blog/case-study/nomadomics
 - Editorial policy: https://www.nomadomics.blog/about
 - Case-study source and LinkedIn package: `/Users/guy/Documents/Portfolio/Nomadomics/`
 
@@ -57,8 +57,12 @@ npm run build
 
 The build is the release gate for the case-study route and navigation links. The Strapi service is a separate backend and remains managed by its LaunchAgent/runbook.
 
+## Production verification
+
+The case-study release is live on the existing Vercel production aliases. A cache-busting probe returned HTTP 200 for the case-study route, sitemap, and homepage; the case-study URL appears in both the live sitemap and homepage navigation.
+
 ## Deliberate limits
 
 - This package does not claim that Nomadomics has Search Console-driven learning, revenue, traffic, rankings, or cost savings.
 - The case-study page is static and employer-facing; it does not expose CMS credentials, private analytics, or local career files.
-- Deployment to the existing public host is a separate release action. Verify the final URL after promotion; a local build alone is not proof of production deployment.
+- Production deployment is verified for this release; repeat the cache-busting URL checks after future frontend promotions. A local build alone is not proof of production deployment.
