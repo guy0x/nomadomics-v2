@@ -29,11 +29,18 @@ from strapi import StrapiClient, StrapiError
 
 STATE_FILE = ENGINE_DIR / "state" / "pipeline.jsonl"
 HTML_FILE = ENGINE_DIR / "dashboard.html"
+# Affiliate-click telemetry ingest (appended only — read by revenue attribution).
+CLICKS_LOG = ENGINE_DIR / "clicks.jsonl"
 
 # The dashboard exposes a token-guarded mutation surface. Default bind is
 # loopback-only; set DASHBOARD_HOST=0.0.0.0 only when a reverse proxy or a
 # container needs to reach it, and always with DASHBOARD_ADMIN_TOKEN set.
 DEFAULT_BIND_HOST = "127.0.0.1"
+
+# Loopback bind addresses. Used ONLY by run_server()'s startup warning now
+# that _authorized() is unconditionally fail-closed -- binding to localhost is
+# not an authentication boundary (a web page can POST cross-origin to it).
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # Global lock for background engine runs
 _RUN_LOCK = threading.Lock()
@@ -62,11 +69,28 @@ def _extract_bearer(self) -> str:
 
 
 def _authorized(self) -> bool:
+    # Fail-closed, always. A missing token is NOT an implicit grant.
+    #
+    # This was previously loopback-exempt (uncommitted, "Guy 2026-10-01"), which
+    # let any unauthenticated local POST run mutations -- and loopback is
+    # reachable from ANY web page the operator has open, via a cross-origin form
+    # POST to http://127.0.0.1:8080. Binding to localhost is not an
+    # authentication boundary. Reverted by Guy 2026-10-04.
     token = _get_admin_token()
     if not token:
         return False
     supplied = _extract_bearer(self)
     return hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8"))
+
+
+def _append_click(record: dict) -> None:
+    """Append one affiliate-click telemetry record to clicks.jsonl.
+
+    The file is created on first write. Append-only: records are never
+    mutated in place so attribution stays auditable.
+    """
+    with CLICKS_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
 
 
 def _get_pipeline_logs(limit: int = 25) -> list[dict]:
@@ -173,8 +197,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     "drafts_in_review": sum(1 for a in articles if a.get("status") in ("draft", "in_review")),
                     "published": sum(1 for a in articles if a.get("status") == "published"),
                     "pending_topics": sum(1 for t in topics if t.get("status") == "pending"),
-                    "avg_confidence": round(sum(a.get("confidence", 0) for a in articles) / len(articles), 1) if articles else 0,
-                    "avg_seo_score": round(sum(a.get("seoScore", 0) for a in articles) / len(articles), 1) if articles else 0,
+                    "avg_confidence": round(sum((a.get("confidence") or 0) for a in articles) / len(articles), 1) if articles else 0,
+                    "avg_seo_score": round(sum((a.get("seoScore") or 0) for a in articles) / len(articles), 1) if articles else 0,
                 },
                 "articles": articles,
                 "topics": topics,
@@ -191,6 +215,16 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+
+        if path == "/api/track":
+            # Intentionally UNAUTHENTICATED: called from site JS via
+            # fetch keepalive, which cannot carry the admin token. It only
+            # appends a telemetry record to clicks.jsonl — no pipeline state
+            # mutation — so fail-closed auth is not weakened.
+            if isinstance(body, dict) and body:
+                _append_click(body)
+            self._send_json({"ok": True})
+            return
 
         if not _authorized(self):
             self._send_json({"error": "Unauthorized"}, status=401)
@@ -242,6 +276,13 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 
 def run_server(port: int = 8080, host: str = DEFAULT_BIND_HOST):
+    if host not in _LOOPBACK_HOSTS and not _get_admin_token():
+        print(
+            f"[dashboard] WARNING: bound to {host} with no DASHBOARD_ADMIN_TOKEN — "
+            "all mutations (run-batch, add-topic) will be refused (fail-closed). "
+            "Set DASHBOARD_ADMIN_TOKEN before exposing the dashboard.",
+            file=sys.stderr,
+        )
     server = http.server.HTTPServer((host, port), DashboardHandler)
     bind_desc = "localhost" if host in ("127.0.0.1", "localhost") else host
     print(f"🚀 Nomadomics Mission Control running at http://{bind_desc}:{port}")

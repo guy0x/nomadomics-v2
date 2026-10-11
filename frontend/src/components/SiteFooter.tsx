@@ -56,6 +56,11 @@ export default function SiteFooter() {
                 </Link>
               </li>
               <li>
+                <Link href="/case-study/nomadomics" className="text-sm text-ink-600 hover:text-brand-700">
+                  Nomadomics project case study
+                </Link>
+              </li>
+              <li>
                 <Link href="/privacy" className="text-sm text-ink-600 hover:text-brand-700">
                   Privacy policy
                 </Link>

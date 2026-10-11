@@ -28,7 +28,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ENV_PATH = REPO_ROOT / ".env"
+DEFAULT_SITE_PROFILE_PATH = REPO_ROOT / "config" / "sites" / "nomadomics.json"
 
 # The keys `load_config()` reads. Listed only so the override rule has a
 # documented surface (and so `env_overrides` reports them); the precedence rule
@@ -46,6 +48,10 @@ CONFIG_KEYS = (
     # (openrouter), so an unset env can never move a stage off the free chain.
     "RESEARCH_PROVIDER",
     "DRAFT_PROVIDER",
+    # Non-secret site identity controls. Empty values remain unset, like all
+    # other process overrides handled by `_resolve_env`.
+    "NOMADOMICS_SITE_PROFILE",
+    "NOMADOMICS_SITE_KEY",
 )
 
 # Stage providers a run may select through the environment. Only these two
@@ -99,18 +105,25 @@ class Config:
     # `_secret_fields` tuple below is the guard list for that (2026-09-18).
     strapi_engine_token: str = field(repr=False)
     openrouter_api_key: str = field(repr=False)
+    # Explicit, non-secret site identity. The profile itself is loaded by callers
+    # that need its full contract; keeping the path/key here makes every run's
+    # scope inspectable without putting secrets in the profile.
+    site_profile_path: Path = DEFAULT_SITE_PROFILE_PATH
+    site_key: str = "nomadomics"
     # Gemini provider (primary). Key is a copy of Guy's Google key; base_url is the
     # OpenAI-compatible endpoint (generativelanguage.googleapis.com/v1beta/openai) so
     # the existing chat/completions calls work unchanged. Gemini honors json_object /
     # structured output more reliably than OpenRouter free models.
     gemini_api_key: str = field(default="", repr=False)
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
-    gemini_research_model: str = "gemini-2.5-flash"
-    gemini_draft_model: str = "gemini-2.5-flash"
-    # 2026-09 key: gemini-2.5-flash 404s on generation (catalog moved to 3.x/3.8),
-    # and under evening load gemini-flash-latest 503-sheds big payloads while tiny
-    # pings pass (t_8fa118c8 matrix). gemini-flash-lite-latest serves all shapes
-    # incl. the real edit prompt (200 in ~23s) — verified live 2026-09-21.
+    # 2026-10-11 live probe: gemini-2.5-flash returns 404 on this account's
+    # OpenAI-compatible endpoint. The already-served lite route answers the
+    # real edit payload, so it is the least-cost usable text lane for research,
+    # draft, and edit until a newer model is independently verified.
+    gemini_research_model: str = "gemini-flash-lite-latest"
+    gemini_draft_model: str = "gemini-flash-lite-latest"
+    # 2026-09 key: gemini-flash-lite-latest serves all shapes incl. the real
+    # edit prompt (200 in ~23s) — verified live 2026-09-21.
     gemini_edit_model: str = "gemini-flash-lite-latest"
     # Per-stage provider. Gemini was primary until the 09-16 key 401s (DIAGNOSIS.md
     # t_541d35ee) and everything ran openrouter-only. edit restored to "gemini"
@@ -198,9 +211,18 @@ def _stage_provider(env: Mapping[str, str], key: str) -> str:
             file=sys.stderr,
         )
         return "openrouter"
-    if raw != "openrouter":
-        print(f"[config] {key} selects the '{raw}' provider for this run", file=sys.stderr)
+    # Provider choice is already present in redacted `engine.cli info` and
+    # lane-smoke state; keep ordinary CLI stdout/stderr byte-clean so cron
+    # wrappers can parse the first line deterministically.
     return raw
+
+
+def _site_profile_path(raw: str | None) -> Path:
+    """Resolve the named profile override without consulting any secret input."""
+    if not raw or not raw.strip():
+        return DEFAULT_SITE_PROFILE_PATH
+    path = Path(raw.strip()).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def load_config(
@@ -232,6 +254,8 @@ def load_config(
         strapi_engine_token=env["STRAPI_ENGINE_TOKEN"],
         openrouter_api_key=env["OPENROUTER_API_KEY"],
         gemini_api_key=env.get("GEMINI_API_KEY", ""),
+        site_profile_path=_site_profile_path(env.get("NOMADOMICS_SITE_PROFILE")),
+        site_key=env.get("NOMADOMICS_SITE_KEY", "nomadomics").strip() or "nomadomics",
         premium_enabled=premium,
         auto_publish_enabled=auto_publish,
         dashboard_admin_token=env.get("DASHBOARD_ADMIN_TOKEN", ""),
@@ -248,6 +272,8 @@ def redact(config: Config) -> dict:
     """Config as a safe dict with secret values masked (for logs / reports)."""
     return {
         "strapi_url": config.strapi_url,
+        "site_profile_path": str(config.site_profile_path),
+        "site_key": config.site_key,
         "research_model": config.gemini_research_model if config.research_provider == "gemini" else config.research_model,
         "draft_model": config.gemini_draft_model if config.draft_provider == "gemini" else config.draft_model,
         "edit_model": config.gemini_edit_model,

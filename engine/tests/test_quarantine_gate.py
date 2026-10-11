@@ -58,8 +58,10 @@ def make_article(
         "confidence": confidence,
         "status": status,
         "bodyMarkdown": (
-            "# Title\n\nBody content here.\n\n## Section\nSome text.\n"
-            "https://irs.gov/one\nhttps://irs.gov/two\n"
+            "# Title\n\nBody content here.\n\n## Section\nSome text.\n\n"
+            "## Sources\n\n"
+            "- [IRS one](https://irs.gov/one)\n"
+            "- [IRS two](https://irs.gov/two)\n"
         ),
         "excerpt": "A short excerpt for the card.",
         "metaTitle": "Tax Article",
@@ -84,6 +86,7 @@ def _isolate_state(monkeypatch, tmp_path):
     monkeypatch.setattr(publish, "SNAPSHOT", tmp_path / "published-slugs.json")
     monkeypatch.setattr(publish, "PUBLIC_CARDS", tmp_path / "cards")
     monkeypatch.setattr(publish, "PUBLIC_OG", tmp_path / "og")
+    monkeypatch.setattr(publish, "browser_asset_ready", lambda slug: (True, "fixture receipt"))
 
 
 # --- decision helpers --------------------------------------------------------

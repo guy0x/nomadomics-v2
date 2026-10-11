@@ -6,8 +6,8 @@ in the BODY — one gate, two different inputs. So an article could clear the wr
 check and still be permanently unpublishable: verified live 2026-09-25, every
 non-quarantine `in_review` row (8 of them, conf 75-87) failed `fewer than 2 real
 citations`, and a fresh 09-25 draft (`spain-digital-nomad-visa`, conf 90) was
-written with `urls=0`. Now the body is topped up from the article's own research
-facts and both lanes call the same implementation.
+written with `urls=0`. The backstop now guarantees both real inline citations
+and a reader-visible `## Sources` section.
 """
 import sys
 from pathlib import Path
@@ -33,7 +33,7 @@ REAL_FACTS = [
 
 CITATION_LESS_BODY = (
     "# FEIE Guide for Digital Nomads\n\n"
-    "Picture this: the taxman, and you moving country to escape him.\n\n"
+    "The FEIE can exclude foreign earned income when you meet the test.\n\n"
     "## The FEIE Basics\n"
     "The FEIE excludes foreign earned income.\n\n"
     "## Bottom Line\n"
@@ -84,13 +84,23 @@ def test_without_the_backstop_the_same_body_fails_the_publish_gate():
         "bodyMarkdown": CITATION_LESS_BODY,
     })
 
-    assert errors == ["fewer than 2 real citations"]
+    assert errors == [
+        "fewer than 2 real citations",
+        "missing visible Sources section",
+    ]
 
 
-def test_a_body_that_already_cites_two_real_sources_is_untouched():
-    body = CITATION_LESS_BODY + "\nhttps://www.irs.gov/a\nhttps://www.irs.gov/b\n"
+def test_a_body_that_already_cites_two_real_sources_gains_a_visible_section():
+    body = (
+        CITATION_LESS_BODY
+        + "\nSee [IRS](https://www.irs.gov/a) and [State](https://www.irs.gov/b).\n"
+    )
+    out = ensure_body_citations(body, REAL_FACTS)
 
-    assert ensure_body_citations(body, REAL_FACTS) == body
+    assert out != body
+    assert out.count("## Sources") == 1
+    assert "https://www.irs.gov/feie" in out
+    assert "https://travel.state.gov/visas.html" in out
 
 
 def test_placeholder_and_non_https_facts_are_never_cited():
@@ -112,7 +122,7 @@ def test_only_the_missing_real_facts_are_appended():
 
     out = ensure_body_citations(body, REAL_FACTS)
 
-    assert out.count("https://www.irs.gov/feie") == 1
+    assert out.count("https://www.irs.gov/feie") == 2
     assert "https://travel.state.gov/visas.html" in out
 
 

@@ -218,7 +218,7 @@ def _patch_stages(monkeypatch):
     monkeypatch.setattr(pipeline_cli, "validate_research", lambda r, min_facts=3: (True, [], []))
     body = (
         "# How to Get Paid as a Freelancer While Abroad\n\n"
-        "Picture this: your client wires money and 6% evaporates in fees.\n\n"
+        "A 6% transfer fee can erase the margin on an overseas invoice.\n\n"
         "## Payment Rails Compared\n"
         "- Wise: ~0.4% mid-market\n"
         "- Payoneer: USD accounts\n\n"

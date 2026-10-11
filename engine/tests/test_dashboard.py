@@ -142,3 +142,34 @@ def test_get_endpoint_is_open_without_auth(server, monkeypatch):
     # A GET 404 JSON response proves GET paths are not gated by the token.
     status, _, _ = _request(server, "GET", "/api/nope")
     assert status == 404
+
+
+# --- affiliate-click telemetry ingest --------------------------------------
+
+def test_post_api_track_appends_click_without_token(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(ds, "CLICKS_LOG", tmp_path / "clicks.jsonl")
+    status, _, body = _request(
+        server,
+        "POST",
+        "/api/track",
+        body={"offer_name": "Wise", "article_slug": "test"},
+    )
+    assert status == 200
+    assert json.loads(body) == {"ok": True}
+    lines = (tmp_path / "clicks.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == {"offer_name": "Wise", "article_slug": "test"}
+
+
+def test_post_api_track_empty_payload_writes_nothing(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(ds, "CLICKS_LOG", tmp_path / "clicks.jsonl")
+    status, _, body = _request(server, "POST", "/api/track", body={})
+    assert status == 200
+    assert json.loads(body) == {"ok": True}
+    assert not (tmp_path / "clicks.jsonl").exists()
+
+
+def test_post_api_track_does_not_weaken_mutation_auth(server):
+    # /api/track is the only unauthenticated POST; run-batch still fails closed.
+    status, _, _ = _request(server, "POST", "/api/run-batch", body={"count": 1})
+    assert status == 401

@@ -214,12 +214,16 @@ export default async function ArticlePage({
               />
             </figure>
 
-            {commercial?.quickVerdict && <QuickVerdict verdict={commercial.quickVerdict} />}
+            {commercial?.quickVerdict && (
+              <QuickVerdict verdict={commercial.quickVerdict} slug={article.slug} />
+            )}
 
             {/* Body */}
             <div className="article-body mt-8">{content}</div>
 
-            {commercial?.comparison && <ComparisonTable table={commercial.comparison} />}
+            {commercial?.comparison && (
+              <ComparisonTable table={commercial.comparison} slug={article.slug} />
+            )}
             {(commercial?.pros || commercial?.cons) && (
               <ProsCons pros={commercial.pros ?? []} cons={commercial.cons ?? []} />
             )}
@@ -248,7 +252,7 @@ export default async function ArticlePage({
         </div>
       </article>
 
-      {stickyOffer && <StickyOfferBar offer={stickyOffer} />}
+      {stickyOffer && <StickyOfferBar offer={stickyOffer} slug={article.slug} />}
     </>
   );
 }

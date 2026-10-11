@@ -12,6 +12,10 @@
   },
   "pluginOptions": {},
   "attributes": {
+    "siteKey": {
+      "type": "string",
+      "default": "nomadomics"
+    },
     "title": {
       "type": "string",
       "required": true,

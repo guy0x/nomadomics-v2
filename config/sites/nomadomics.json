@@ -1,0 +1,10 @@
+{
+  "site_key": "nomadomics",
+  "brand_name": "Nomadomics",
+  "base_url": "https://www.nomadomics.blog",
+  "default_language": "en",
+  "categories": ["banking", "taxes", "travel", "gear", "cities"],
+  "sensitive_categories": ["taxes", "legal", "medical", "visas", "banking"],
+  "prompt_dir": "engine/writer/prompts",
+  "affiliate_disclosure_path": "/disclosure"
+}

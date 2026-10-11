@@ -1,5 +1,8 @@
+"use client";
+
 import type { ComparisonTable as Table } from "@/lib/offers";
 import { isMonetized } from "@/lib/offers";
+import { trackAffiliateClick } from "@/lib/telemetry";
 import { Check, X, ArrowRight } from "./Icons";
 
 function Cell({ value }: { value: string | boolean }) {
@@ -9,7 +12,14 @@ function Cell({ value }: { value: string | boolean }) {
 }
 
 /** Responsive side-by-side comparison table with per-column affiliate CTAs. */
-export default function ComparisonTable({ table }: { table: Table }) {
+export default function ComparisonTable({
+  table,
+  slug = "",
+}: {
+  table: Table;
+  /** Article slug, attached to affiliate-click telemetry for attribution. */
+  slug?: string;
+}) {
   // Guard: only render the table if every column's offer link is monetized —
   // otherwise we'd be sending free traffic to non-partner brands.
   if (!table.columns.every((col) => isMonetized(col.offer.href))) return null;
@@ -62,6 +72,7 @@ export default function ComparisonTable({ table }: { table: Table }) {
                     href={col.offer.href}
                     target="_blank"
                     rel="noopener noreferrer sponsored"
+                    onClick={() => trackAffiliateClick(col.offer.name, slug)}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
                   >
                     {col.offer.ctaLabel}

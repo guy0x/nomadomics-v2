@@ -57,7 +57,15 @@ HOUSE_VOICE_OPENER = (
     "start looking for help."
 )
 
-BODY_MARKDOWN = "# Best eSIM Travel Plans for Budget Nomads in 2026\n\nSee [this guide](/best-esim-plans) for details.\n"
+# Two internal links: the monitor gained a "need >= 2 internal links" rule after
+# this fixture was written, and a one-link body tripped it -- making an excerpt
+# test fail on an unrelated invariant. The count is incidental here; the test
+# exists to cover the excerpt rules only (see stored_record's docstring).
+BODY_MARKDOWN = (
+    "# Best eSIM Travel Plans for Budget Nomads in 2026\n\n"
+    "See [this guide](/best-esim-plans) for details, or compare "
+    "[Airalo vs Nomad eSIM](/airalo-vs-nomad-esim) side by side.\n"
+)
 
 LIVE_HTML = (
     "<html><head><title>Best eSIM Travel Plans for Budget Nomads</title>"

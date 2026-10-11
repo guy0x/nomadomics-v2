@@ -21,19 +21,17 @@
 
 ## Distinctive Voice Markers
 
-### Opening patterns (verbatim from corpus)
+### Historical opening patterns (do not copy literally)
 
-1. **Scene-setting vignettes** — paint a picture before the thesis:
-   - *"Picture this: while your former colleagues are stuck in rush hour traffic heading to their fluorescent-lit offices, you're wrapping up your workday on a sunlit balcony overlooking the Adriatic Sea."*
-   - *"Imagine this: You're in Thailand, sipping a coconut on the beach, and you need to pay your freelancer in Germany."*
-   - *"But while you're chasing sunsets and Wi-Fi signals, there's one thing you can't outrun: taxes."*
+The source corpus contains several opening shapes, but its repeated scene-setting
+language caused the audit's 44/47 opening-pattern failure. Treat these as history,
+not templates for new articles:
 
-2. **The "carrot" frame** — open with the savings/benefit number:
-   - *"If you could cut that by 20% using a few easy hacks, you're saving over $900 per year…"*
-   - *"That means hundreds — sometimes thousands — of dollars stay in your pocket every year."*
-
-3. **Pattern-break into reality check** — dream → wake-up moment:
-   - *"Suddenly, you wake up. You're no longer in Thailand, but you're in your apartment…"* (crypto piece)
+- **Scene-setting vignettes** — allowed only when genuinely topic-specific, and never
+  with the prefixes `Picture this` or `Imagine this`.
+- **Money-frame** — open with a specific saving, fee, threshold, or consequence.
+- **Counterintuitive claim** — lead with the surprising truth the guide will prove.
+- **Reader decision** — open with the choice the reader must make and its stakes.
 
 ### Tone & punctuation
 
@@ -89,10 +87,11 @@
 
 ## Hook & Closing Templates
 
-### Openers (pick one, never repeat in consecutive pieces)
-1. **Vivid scene** — set a place + sensory detail in the first sentence.
-2. **Money-frame** — open with a specific dollar/euro saving.
-3. **Counterintuitive claim** — *"Geoarbitrage sounds like cheating, but it's just math."*
+### Openers (pick one; vary the shape across consecutive pieces)
+1. **Money-frame** — open with a specific saving, fee, threshold, or consequence.
+2. **Counterintuitive claim** — *"Geoarbitrage sounds like cheating, but it's just math."*
+3. **Reader decision** — name the choice and the cost of getting it wrong.
+4. **Vivid scene** — use only when topic-specific; never begin with `Picture this` or `Imagine this`.
 
 ### Closers
 1. **"Bottom line"** — one-paragraph summary, 3–5 bullets.
@@ -113,7 +112,9 @@
 
 ## Voice Self-Check (run before publishing)
 
-- [ ] Opens with scene, money-frame, or counterintuitive claim — never a topic-sentence intro.
+- [ ] Opens with a topic-specific money-frame, counterintuitive claim, reader decision, or genuinely specific scene.
+- [ ] Does not begin with `Picture this` or `Imagine this`.
+- [ ] Ends with a visible `## Sources` section containing at least two real markdown links.
 - [ ] Avg sentence length under 22 words.
 - [ ] At least 3 specific dollar/euro/% numbers in the first 500 words.
 - [ ] Zero "In this article…" or "Let's explore…" filler.

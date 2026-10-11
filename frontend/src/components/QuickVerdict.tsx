@@ -1,9 +1,19 @@
+"use client";
+
 import type { QuickVerdict as Verdict } from "@/lib/offers";
 import { isMonetized } from "@/lib/offers";
+import { trackAffiliateClick } from "@/lib/telemetry";
 import { Star, Check, ArrowRight, Award } from "./Icons";
 
 /** MoneyMade-style above-the-fold verdict box with score + primary CTA. */
-export default function QuickVerdict({ verdict }: { verdict: Verdict }) {
+export default function QuickVerdict({
+  verdict,
+  slug = "",
+}: {
+  verdict: Verdict;
+  /** Article slug, attached to affiliate-click telemetry for attribution. */
+  slug?: string;
+}) {
   const { offer } = verdict;
   // Guard: no CTA unless the offer link is actually monetized (no free traffic).
   if (!isMonetized(offer.href)) return null;
@@ -54,6 +64,7 @@ export default function QuickVerdict({ verdict }: { verdict: Verdict }) {
             href={offer.href}
             target="_blank"
             rel="noopener noreferrer sponsored"
+            onClick={() => trackAffiliateClick(offer.name, slug)}
             className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-brand-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
           >
             {offer.ctaLabel}

@@ -1,21 +1,16 @@
-"""Daily publish pipeline runner.
-
-Picks the highest-confidence in_review article (EXCLUDING quarantine-class
-articles — see the QUARANTINED_DECISIONS gate below), runs a focused final
-polish (TL;DR + internal links + meta tightening), generates card/OG cover art
-via Cake Nano, publishes to Strapi (status=published, publishedAt=now), commits
-AND pushes the cover assets to origin/main, and verifies the article page and
-both art URLs are live (a publish is not "done" while its card/og 404).
-
-CLI entrypoint: `publish` command (registered in engine/pipeline_cli.py).
-State: append-only engine/state/publish-pipeline.jsonl (single writer: this module).
-Secrets: Cake API key read from HERMES_CUSTOM_CAKE_NANO_GPT_COM_API_KEY — never logged.
-"""
+# Nomadomics covers: browser-account Gemini (Nano Banana) is the only new-cover
+# route. The scheduled worker stages, QA-gates, commits, and pushes exact asset
+# pairs before this publisher is allowed to write status=published.
+#
+# The text pipeline and cover pipeline are separate: Gemini Flash text hops may
+# use the account API, while cover generation uses the signed-in Gemini browser
+# session through CDP and never logs session-scoped image URLs.
 
 from __future__ import annotations
 
 import base64
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -49,7 +44,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PUBLIC_CARDS = REPO_ROOT / "frontend" / "public" / "cards"
 PUBLIC_OG = REPO_ROOT / "frontend" / "public" / "og"
 SNAPSHOT = REPO_ROOT / "frontend" / "scripts" / "published-slugs.json"
+GEMINI_ASSET_MANIFEST = Path.home() / ".hermes/state/nomadomics_gemini_assets.json"
 CARD_W, CARD_H = 1200, 630
+GEMINI_CARD_SIZE = (1200, 675)
+GEMINI_OG_SIZE = (1200, 630)
+GEMINI_MAX_BYTES = 500_000
 MIN_CONFIDENCE = 75
 
 # --- asset shipping + verification (2026-09-20, kanban t_69dcb49a) -----------
@@ -929,6 +928,56 @@ def write_slug_snapshot(slugs) -> bool:
         return False
 
 
+def _gemini_asset_manifest() -> dict:
+    """Read the browser-Gemini release manifest without exposing its contents."""
+    try:
+        data = json.loads(GEMINI_ASSET_MANIFEST.read_text())
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    assets = data.get("assets") if isinstance(data.get("assets"), dict) else data
+    return assets if isinstance(assets, dict) else {}
+
+
+def browser_asset_ready(slug: str) -> tuple[bool, str]:
+    """Verify one staged Gemini-web asset receipt before the Strapi write.
+
+    The worker owns generation, deterministic checks, vision QA, and the
+    manifest. The publisher repeats the cheap local checks so a stale or
+    hand-copied pair cannot pass merely because it has the expected filename.
+    """
+    record = _gemini_asset_manifest().get(slug)
+    if not isinstance(record, dict):
+        return False, "no browser-Gemini manifest record"
+    if record.get("status") != "ready" or record.get("provider") != "gemini-web":
+        return False, "browser-Gemini receipt is not ready"
+    qa = record.get("qa")
+    if not isinstance(qa, dict) or qa.get("verdict") != "pass":
+        return False, "browser-Gemini visual QA did not pass"
+    specs = (("card", PUBLIC_CARDS / f"{slug}.png", GEMINI_CARD_SIZE),
+             ("og", PUBLIC_OG / f"{slug}.png", GEMINI_OG_SIZE))
+    for kind, path, expected_size in specs:
+        meta = record.get(kind)
+        if not isinstance(meta, dict) or not path.is_file():
+            return False, f"{kind} derivative missing"
+        try:
+            width = int(meta.get("width", 0))
+            height = int(meta.get("height", 0))
+            expected_bytes = int(meta.get("bytes", -1))
+        except (TypeError, ValueError):
+            return False, f"{kind} manifest metadata is invalid"
+        if width != expected_size[0] or height != expected_size[1]:
+            return False, f"{kind} dimensions are not {expected_size[0]}x{expected_size[1]}"
+        size = path.stat().st_size
+        if size <= 0 or size > GEMINI_MAX_BYTES or size != expected_bytes:
+            return False, f"{kind} byte bound/hash metadata mismatch"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != meta.get("sha256"):
+            return False, f"{kind} SHA-256 mismatch"
+    return True, "browser-Gemini asset receipt verified"
+
+
 # ----------------------------------------------------------------------------
 # Publish one
 # ----------------------------------------------------------------------------
@@ -972,6 +1021,9 @@ def publish_one(
     journal = journal_quarantined_docids()
     approvals = release_approved_docids()
 
+    cover_mode = (os.environ.get("NOMADOMICS_COVER_MODE") or "gemini-browser").strip().lower()
+    browser_only = cover_mode in {"gemini-browser", "browser", "nano-banana"}
+    cover_blocked: list[str] = []
     winner: dict | None = None
     for a in articles:
         slug = a.get("slug")
@@ -990,6 +1042,11 @@ def publish_one(
         # and two real citations have to hold or this article stays in review.
         if article_invariant_errors(a):
             continue
+        if browser_only:
+            ready, reason = browser_asset_ready(str(slug))
+            if not ready:
+                cover_blocked.append(f"{slug} ({reason})")
+                continue
         winner = a
         break
 
@@ -1017,11 +1074,12 @@ def publish_one(
         blocked_suffix = (
             f" · invariant-blocked: {', '.join(invariant_blocked)}" if invariant_blocked else ""
         )
+        cover_suffix = f" · browser-cover-blocked: {', '.join(cover_blocked)}" if cover_blocked else ""
         return {
             "event": "skip",
             "reason": (
                 f"no eligible in_review article >= {MIN_CONFIDENCE} confidence "
-                f"(top available: {top.get('slug')}={top.get('confidence')}){suffix}{blocked_suffix}"
+                f"(top available: {top.get('slug')}={top.get('confidence')}){suffix}{blocked_suffix}{cover_suffix}"
             ),
         }
 
@@ -1039,6 +1097,13 @@ def publish_one(
     refused = _hard_refuse_if_quarantined(winner, journal, approvals)
     if refused is not None:
         return refused
+
+    # Defense in depth: the browser worker may have changed its receipt between
+    # candidate selection and this write. Never publish an unverified pair.
+    if browser_only:
+        ready, reason = browser_asset_ready(slug)
+        if not ready:
+            return {"event": "skip", "slug": slug, "reason": f"browser cover gate: {reason}"}
 
     original_md = winner.get("bodyMarkdown") or ""
 
@@ -1119,19 +1184,34 @@ def publish_one(
         client.update_article(doc_id, update_payload, status="published")
         result["publishedAt"] = update_payload["publishedAt"]
 
-        # cover art (non-fatal)
-        if not skip_image:
-            print(f"  generating cover for {slug}…")
+        # Cover release is browser-account Gemini only in the canonical lane.
+        # The worker has already downloaded, post-processed, QA-gated, committed,
+        # and pushed this pair. The publisher refreshes the live slug snapshot
+        # and re-verifies the commit/push boundary before declaring success.
+        if browser_only:
+            result["cover"] = "gemini-web-ready"
+            result["coverProvider"] = "gemini-web/nano-banana"
+            if not skip_image and not no_commit:
+                write_slug_snapshot([a.get("slug") for a in list_published(client, limit=200)])
+                committed = commit_assets(slug)
+                result["assetCommit"] = "ok" if committed else "not-needed-or-failed"
+                print("  pushing browser-Gemini cover art to origin…")
+                push_ok, push_detail = push_assets()
+                result["push"] = "ok" if push_ok else "failed"
+                result["pushDetail"] = push_detail
+                print(f"  push: {push_detail}")
+                if not push_ok:
+                    print(f"  !! asset push failed: {push_detail}", file=sys.stderr)
+        elif not skip_image:
+            # Legacy emergency mode only. The default and scheduled lane are
+            # browser-only; an explicit NOMADOMICS_COVER_MODE=cake-api is needed
+            # to use the historical paid/API generator.
+            print(f"  generating legacy cover for {slug}…")
             ok = generate_cover(slug, title)
             result["cover"] = "generated" if ok else "failed"
             if ok and not no_commit:
-                # Refresh the gate's snapshot from the live set BEFORE committing, so
-                # the same commit carries art + snapshot (see write_slug_snapshot).
                 write_slug_snapshot([a.get("slug") for a in list_published(client, limit=200)])
                 commit_assets(slug)
-                # Ship it (2026-09-20, t_69dcb49a): committing is not publishing —
-                # Vercel serves only what is on origin/main, so an unpushed commit
-                # leaves the page 200 and its art 404.
                 print("  pushing cover art to origin…")
                 push_ok, push_detail = push_assets()
                 result["push"] = "ok" if push_ok else "failed"
@@ -1158,7 +1238,7 @@ def publish_one(
         # reported `live: true` for art that 404'd (2026-09-20). Art is a static
         # file that exists only once origin/main's commit is deployed, so it is
         # asserted separately, with a bounded retry for deploy lag.
-        site = (os.environ.get("SITE_URL") or "https://nomadomics-v2.vercel.app").rstrip("/")
+        site = (os.environ.get("SITE_URL") or "https://www.nomadomics.blog").rstrip("/")
         live_url = f"{site}/{slug}"
         result["liveUrl"] = live_url
         try:

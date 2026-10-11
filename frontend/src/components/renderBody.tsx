@@ -57,7 +57,7 @@ export function renderBody(bodyMarkdown: string): RenderedBody {
   };
 
   const components: Components = {
-    h2: ({ node: _node, children, ...props }) => {
+    h2: ({ children, ...props }) => {
       const text = extractText(children);
       const id = uniqueId(slugify(text));
       toc.push({ id, text });
@@ -67,7 +67,7 @@ export function renderBody(bodyMarkdown: string): RenderedBody {
         </h2>
       );
     },
-    a: ({ node: _node, href, children, ...props }) => (
+    a: ({ href, children, ...props }) => (
       <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
         {children}
       </a>

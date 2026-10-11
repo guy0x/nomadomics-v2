@@ -69,8 +69,10 @@ def row(
         "publishedAt": None,
         "bodyMarkdown": body
         or (
-            "# Title\n\nBody content here.\n\n## Section\nSome text.\n"
-            "https://irs.gov/one\nhttps://irs.gov/two\n"
+            "# Title\n\nBody content here.\n\n## Section\nSome text.\n\n"
+            "## Sources\n\n"
+            "- [IRS one](https://irs.gov/one)\n"
+            "- [IRS two](https://irs.gov/two)\n"
         ),
         "excerpt": excerpt,
         "metaTitle": "A Meta Title",
@@ -93,6 +95,7 @@ def _isolate_state(monkeypatch, tmp_path):
     monkeypatch.setattr(publish, "DRAFT_JOURNAL", tmp_path / "pipeline.jsonl")
     monkeypatch.setattr(publish, "RELEASE_APPROVALS", tmp_path / "release-approvals.jsonl")
     monkeypatch.setattr(publish, "_published_slugs", lambda *a, **k: set())
+    monkeypatch.setattr(publish, "browser_asset_ready", lambda slug: (True, "fixture receipt"))
 
 
 # --- the union ---------------------------------------------------------------

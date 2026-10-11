@@ -181,6 +181,10 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(publish, "SNAPSHOT", tmp_path / "published-slugs.json")
     monkeypatch.setattr(publish, "PUBLIC_CARDS", tmp_path / "cards")
     monkeypatch.setattr(publish, "PUBLIC_OG", tmp_path / "og")
+    # These tests exercise post-Strapi publish shipping and live verification;
+    # browser-cover receipt behavior is covered separately. Seed the isolated
+    # fixture with the receipt that production would obtain from the worker.
+    monkeypatch.setattr(publish, "browser_asset_ready", lambda slug: (True, "fixture receipt"))
 
 
 def _ready_article():
@@ -191,8 +195,10 @@ def _ready_article():
         "confidence": 90,
         "status": "in_review",
         "bodyMarkdown": (
-            "# Cost of Living in Chiang Mai\n\nBody content here.\n"
-            "https://www.numbeo.com/cost-of-living\nhttps://www.expatistan.com/cost-of-living\n"
+            "# Cost of Living in Chiang Mai\n\nBody content here.\n\n"
+            "## Sources\n\n"
+            "- [Numbeo cost of living](https://www.numbeo.com/cost-of-living)\n"
+            "- [Expatistan cost of living](https://www.expatistan.com/cost-of-living)\n"
         ),
         "excerpt": "Chiang Mai is one of the cheaper long-stay cities.",
         "metaTitle": "Cost of Living in Chiang Mai",
@@ -222,6 +228,7 @@ def _publish(monkeypatch, *, page_code, asset_code, push_result=(True, "pushed 2
     monkeypatch.setattr(publish, "ASSET_VERIFY_DELAY_SECONDS", 0.0)
     monkeypatch.delenv("NOMADOMICS_ASSET_VERIFY_ATTEMPTS", raising=False)
     monkeypatch.delenv("NOMADOMICS_ASSET_VERIFY_DELAY", raising=False)
+    monkeypatch.setenv("SITE_URL", SITE)
     return publish.publish_one(client or FakeClient([_ready_article()]), None)  # type: ignore[arg-type]
 
 

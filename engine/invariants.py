@@ -1,14 +1,15 @@
 """Write-time article invariants (ratified E, 2026-09-23; meta-shape rules t_7197386f).
 
 An article is publishable only when the excerpt and meta are non-empty, the
-slug has no year, at least two citations are real, and the meta fields are
-shaped copy rather than generator artifacts — the metaDescription is distinct
-from the excerpt, carries no migration template tail, ends in terminal
-punctuation and fits 120-160c; neither meta field ends in a literal '...'; the
-metaTitle fits the 60c SERP budget. A citation is real only when the supplied
-fetch returns a page whose host matches the URL. Unreachable, empty, and
-host-mismatched results are not real. This module does not publish and does
-not read secrets.
+slug has no year, at least two citations are real and visible in a ``## Sources``
+section, the opening is not one of the retired generic templates, and all links
+pass link hygiene. Meta fields are shaped copy rather than generator artifacts —
+the metaDescription is distinct from the excerpt, carries no migration template
+tail, ends in terminal punctuation and fits 120-160c; neither meta field ends
+in a literal '...'; the metaTitle fits the 60c SERP budget. A citation is real
+only when the supplied fetch returns a page whose host matches the URL.
+Unreachable, empty, and host-mismatched results are not real. This module does
+not publish and does not read secrets.
 """
 from __future__ import annotations
 
@@ -30,6 +31,16 @@ META_TITLE_VALUE_MAX = 47
 _TEMPLATE_TAIL_RE = re.compile(r"Learn how to save money on", re.I)
 _ELLIPSIS_ENDS = ("...", "\u2026")
 _TERMINAL_ENDS = (".", "!", "?", ")")
+
+# Content-quality gates (canonized 2026-10-11 from the audit evidence used on
+# slide 6). The historical corpus overused a "Picture this" opening and often
+# had inline citations without a reader-visible source list. New writes must
+# prevent both regressions; existing published content is not bulk-rewritten by
+# this module.
+_SOURCES_HEADING_RE = re.compile(r"(?im)^\s*##\s+sources\s*$")
+_GENERIC_OPENING_RE = re.compile(
+    r"(?i)^\s*(?:picture\s+this\b|imagine\s+(?:this|you\b))"
+)
 
 
 def citation_fetch(url: str):
@@ -131,18 +142,68 @@ def check_write_invariants(article: dict, citations: list | None = None, fetch=N
     return errors
 
 
+def source_section_urls(body: str) -> list[str]:
+    """Return real-looking URLs inside the first visible ``## Sources`` section.
+
+    Section parsing is intentionally markdown-light: source bullets and markdown
+    links are both accepted, but the section must exist as a reader-visible H2.
+    Reality (HTTP status/body/host) is checked by ``source_section_issues`` with
+    the injected fetch, not by this extractor.
+    """
+    body = body or ""
+    heading = _SOURCES_HEADING_RE.search(body)
+    if not heading:
+        return []
+    tail = body[heading.end():]
+    next_heading = re.search(r"(?im)^\s*##\s+", tail)
+    section = tail[:next_heading.start()] if next_heading else tail
+    return body_citation_urls(section)
+
+
+def source_section_issues(body: str, fetch=None) -> list[str]:
+    """Named failures for the reader-visible source list contract."""
+    fetch = fetch or citation_fetch
+    if not _SOURCES_HEADING_RE.search(body or ""):
+        return ["missing visible Sources section"]
+    real = [u for u in source_section_urls(body) if citation_is_real(u, fetch)]
+    if len(real) < 2:
+        return ["fewer than 2 visible source citations"]
+    return []
+
+
+def opening_pattern_issues(body: str) -> list[str]:
+    """Reject retired generic opener templates that caused corpus repetition."""
+    body = body or ""
+    # Ignore the article H1 and blank lines; inspect the first prose paragraph.
+    prose = re.sub(r"(?m)^\s*#\s+.*$", "", body, count=1).strip()
+    first = re.split(r"\n\s*\n", prose, maxsplit=1)[0].strip()
+    if _GENERIC_OPENING_RE.match(first):
+        return ["generic opening template is not allowed"]
+    return []
+
+
 def article_invariant_errors(article: dict, fetch=None) -> list[str]:
-    """Invariants for a Strapi article row, citations taken from its markdown."""
-    return check_write_invariants(
+    """All write/publish invariants for a Strapi article row.
+
+    This is the single shared gate used by the draft and daily publish lanes:
+    metadata/citations, visible source coverage, opening diversity, and link
+    hygiene must agree before a write or publish can proceed.
+    """
+    body = article.get("bodyMarkdown") or ""
+    errors = check_write_invariants(
         {
             "excerpt": article.get("excerpt"),
             "metaTitle": article.get("metaTitle"),
             "metaDescription": article.get("metaDescription"),
             "slug": article.get("slug"),
         },
-        [{"url": u} for u in body_citation_urls(article.get("bodyMarkdown") or "")],
+        [{"url": u} for u in body_citation_urls(body)],
         fetch=fetch,
     )
+    errors.extend(source_section_issues(body, fetch=fetch))
+    errors.extend(opening_pattern_issues(body))
+    errors.extend(link_hygiene_issues(body))
+    return errors
 
 
 def body_citation_urls(body: str) -> list[str]:
@@ -208,37 +269,60 @@ def _fact_source(fact) -> tuple[str, str]:
     )
 
 
-def ensure_body_citations(body: str, facts, fetch=None) -> str:
-    """Guarantee the article body carries >= 2 real citations.
+def _source_line(url: str, title: str) -> str:
+    """Render a source as a proper markdown link, even without a title."""
+    anchor = _norm_spaces(title) or "Source"
+    return f"- [{anchor}]({url})"
 
-    The publish gate counts citations in `bodyMarkdown`, but the draft lane used
-    to validate the research facts' `source_url`s — two different inputs for one
-    gate, so an article could clear the write check and be unpublishable forever
-    (verified live 2026-09-25: every non-quarantine `in_review` row failed
-    `fewer than 2 real citations`, and the writer emits no URLs for most
-    topics). The writer is now asked to cite inline (writer prompt) and this is
-    the deterministic backstop: when the body still has fewer than two real
-    citations, a `## Sources` section built from the article's own research
-    facts is appended. Real facts only — a placeholder host or a non-https URL
-    is never cited — and a body that already cites two real sources is returned
-    unchanged, so the function is idempotent.
+
+def _insert_source_lines(body: str, lines: list[str]) -> str:
+    """Insert missing source bullets into the first visible Sources section."""
+    if not lines:
+        return body
+    heading = _SOURCES_HEADING_RE.search(body or "")
+    if not heading:
+        joined = "\n".join(lines)
+        return f"{(body or '').rstrip()}\n\n## Sources\n\n{joined}\n"
+    return (
+        body[:heading.end()]
+        + "\n\n"
+        + "\n".join(lines)
+        + "\n"
+        + body[heading.end():].lstrip("\n")
+    )
+
+
+def ensure_body_citations(body: str, facts, fetch=None) -> str:
+    """Guarantee two real citations and a visible ``## Sources`` section.
+
+    Inline citations remain useful for prose, but the audit showed that inline
+    links alone do not give readers a reliable source surface. This backstop
+    therefore adds the smallest missing set of real research sources to a
+    visible section even when the body already has two inline links. Generated
+    bullets are always markdown links so the link-hygiene gate cannot reject its
+    own repair. The function is idempotent and never fabricates a source.
     """
     fetch = fetch or citation_fetch
     real: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for fact in facts or []:
         url, title = _fact_source(fact)
-        if url and url not in [u for u, _ in real] and citation_is_real(url, fetch):
+        if url and url not in seen and citation_is_real(url, fetch):
             real.append((url, title))
+            seen.add(url)
 
+    body = body or ""
     cited = [u for u in body_citation_urls(body) if citation_is_real(u, fetch)]
-    if len(cited) >= 2:
+    visible = [u for u in source_section_urls(body) if citation_is_real(u, fetch)]
+    if len(cited) >= 2 and len(visible) >= 2:
         return body
 
-    missing = [item for item in real if item[0] not in cited]
-    if not missing:
+    visible_set = set(visible)
+    needed = max(0, 2 - len(visible))
+    additions = [item for item in real if item[0] not in visible_set][:needed]
+    if not additions:
         return body
-    lines = "\n".join(f"- [{t}]({u})" if t else f"- {u}" for u, t in missing)
-    return f"{(body or '').rstrip()}\n\n## Sources\n\n{lines}\n"
+    return _insert_source_lines(body, [_source_line(url, title) for url, title in additions])
 
 
 # --- Internal-link backstop (2026-10-04) --------------------------------------

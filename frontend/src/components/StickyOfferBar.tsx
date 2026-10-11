@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import type { Offer } from "@/lib/offers";
 import { isMonetized } from "@/lib/offers";
+import { trackAffiliateClick } from "@/lib/telemetry";
 import { ArrowRight, Star, X } from "./Icons";
 
 /**
  * Mobile-first sticky bottom bar highlighting the #1 pick. Appears after the
  * user scrolls past the hero, dismissible for the session.
  */
-export default function StickyOfferBar({ offer }: { offer: Offer }) {
+export default function StickyOfferBar({ offer, slug = "" }: { offer: Offer; slug?: string }) {
   const [visible, setVisible] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
@@ -56,6 +57,7 @@ export default function StickyOfferBar({ offer }: { offer: Offer }) {
             href={offer.href}
             target="_blank"
             rel="noopener noreferrer sponsored"
+            onClick={() => trackAffiliateClick(offer.name, slug)}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
           >
             <span className="hidden sm:inline">{offer.ctaLabel}</span>

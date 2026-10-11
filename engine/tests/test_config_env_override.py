@@ -27,6 +27,7 @@ from config import (  # noqa: E402
     CONFIG_KEYS,
     ENV_PATH,
     Config,
+    DEFAULT_SITE_PROFILE_PATH,
     _resolve_env,
     load_config,
     redact,
@@ -398,3 +399,26 @@ def test_no_override_keeps_the_cli_output_byte_clean():
     assert "[config]" not in proc.stdout
     merged = (proc.stderr + proc.stdout).splitlines()
     assert merged[0].startswith("run-batch: refused")
+
+
+def test_site_profile_defaults_are_non_secret_and_redacted(dotenv):
+    cfg = load_config(env_path=dotenv, environ={})
+    assert cfg.site_profile_path == DEFAULT_SITE_PROFILE_PATH
+    assert cfg.site_key == "nomadomics"
+    safe = redact(cfg)
+    assert safe["site_profile_path"] == str(DEFAULT_SITE_PROFILE_PATH)
+    assert safe["site_key"] == "nomadomics"
+
+
+def test_site_identity_environment_overrides_preserve_empty_behavior(tmp_path):
+    p = tmp_path / ".env"
+    p.write_text(DOTENV_BODY + "NOMADOMICS_SITE_PROFILE=config/sites/file.json\nNOMADOMICS_SITE_KEY=file-site\n")
+    cfg = load_config(env_path=p, environ={})
+    assert cfg.site_profile_path == REPO_ROOT / "config/sites/file.json"
+    assert cfg.site_key == "file-site"
+    cfg = load_config(
+        env_path=p,
+        environ={"NOMADOMICS_SITE_PROFILE": "", "NOMADOMICS_SITE_KEY": ""},
+    )
+    assert cfg.site_profile_path == REPO_ROOT / "config/sites/file.json"
+    assert cfg.site_key == "file-site"
