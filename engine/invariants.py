@@ -14,6 +14,7 @@ not publish and does not read secrets.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from urllib.parse import urlparse
 
 _YEAR = re.compile(r"20\d{2}")
@@ -176,23 +177,125 @@ def source_section_issues(body: str, fetch=None) -> list[str]:
     return []
 
 
+def _first_prose_paragraph(body: str) -> str:
+    """The article's first prose paragraph, with the H1 removed."""
+    prose = re.sub(r"(?m)^\s*#\s+.*$", "", body or "", count=1).strip()
+    return re.split(r"\n\s*\n", prose, maxsplit=1)[0].strip()
+
+
 def opening_pattern_issues(body: str) -> list[str]:
     """Reject retired generic opener templates that caused corpus repetition."""
-    body = body or ""
-    # Ignore the article H1 and blank lines; inspect the first prose paragraph.
-    prose = re.sub(r"(?m)^\s*#\s+.*$", "", body, count=1).strip()
-    first = re.split(r"\n\s*\n", prose, maxsplit=1)[0].strip()
-    if _GENERIC_OPENING_RE.match(first):
+    if _GENERIC_OPENING_RE.match(_first_prose_paragraph(body)):
         return ["generic opening template is not allowed"]
     return []
 
 
-def article_invariant_errors(article: dict, fetch=None) -> list[str]:
+# --- Corpus-repetition gate (t_252b48e7, 2026-10-12) --------------------------
+# Guy's MCQ verdict: BOTH mechanisms. Evidence: "Picture this, you" opened 13
+# published articles identically and "vibrant" appears in 29 of 50 published
+# articles, while the retired regex bans only two named openers. This is the
+# generalized form: (1) any opener 3-gram already used by >= 2 published
+# articles is a repeated opener template; (2) a seeded cliche census fails an
+# article that leans on >= 2 seeded phrases. Deterministic, no LLM, no new
+# state — the caller passes the published corpus it already fetched.
+CLICHE_PHRASES = (
+    "vibrant", "boasts", "nestled", "hidden gem", "look no further",
+    "game-changer", "when it comes to",
+)
+CLICHE_MAX_PER_ARTICLE = 2      # distinct seeded phrases allowed per article
+OPENER_WORD_WINDOW = 6          # the first N words count as the "opener"
+OPENER_NGRAM_SIZE = 3
+# A 3-gram shared by both members of a two-row corpus proves nothing (and
+# OPENER_MIN_CORPUS=3 means a site's second-ever article can never be blocked
+# by its first), so the opener check needs at least this many usable bodies.
+OPENER_MIN_CORPUS = 3
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _opener_ngrams(body: str) -> set[str]:
+    """The opener's word 3-grams (lowercased), within the first ~6 words."""
+    first = _first_prose_paragraph(body or "")
+    words = _WORD_RE.findall(first.lower())[:OPENER_WORD_WINDOW]
+    n = OPENER_NGRAM_SIZE
+    if len(words) < n:
+        return set()
+    return {" ".join(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def cliche_issues(body: str, max_phrases: int = CLICHE_MAX_PER_ARTICLE) -> list[str]:
+    """Named failure when the body leans on too many seeded cliche phrases.
+
+    The threshold counts DISTINCT seeded phrases present ("using >= 2 seeded
+    cliches"), case-insensitively; the message carries per-phrase hit counts
+    so a rewrite knows what to strip.
+    """
+    text = (body or "").lower()
+    present = []
+    for phrase in CLICHE_PHRASES:
+        hits = len(re.findall(re.escape(phrase), text))
+        if hits:
+            present.append((phrase, hits))
+    if len(present) < max_phrases:
+        return []
+    census = ", ".join(f"'{p}' x{h}" for p, h in present)
+    return [
+        f"cliche density over threshold "
+        f"({len(present)}/{len(CLICHE_PHRASES)} seeded phrases; {census})"
+    ]
+
+
+def corpus_repetition_issues(
+    body: str,
+    published_rows: list[dict],
+    *,
+    own_slug: str = "",
+) -> list[str]:
+    """Named failures tying this body to repeated shapes in the live corpus.
+
+    ``published_rows`` are published article rows ({slug, bodyMarkdown});
+    callers pass the corpus they already fetched (the publish lane's
+    link-target read), so this adds no request of its own. Rows without body
+    text and the article's own slug are skipped; the opener check is inert
+    below OPENER_MIN_CORPUS usable bodies.
+    """
+    bodies = [
+        (str(r.get("slug") or ""), str(r.get("bodyMarkdown") or ""))
+        for r in published_rows or []
+    ]
+    bodies = [(s, b) for s, b in bodies if b.strip() and s != own_slug]
+
+    issues: list[str] = []
+    grams = _opener_ngrams(body)
+    if grams and len(bodies) >= OPENER_MIN_CORPUS:
+        counts: Counter[str] = Counter()
+        for _slug, b in bodies:
+            for gram in _opener_ngrams(b):
+                counts[gram] += 1
+        for gram in sorted(grams):
+            n = counts.get(gram, 0)
+            if n >= 2:
+                issues.append(f"opener 3-gram '{gram}' already used by {n} articles")
+    issues.extend(cliche_issues(body))
+    return issues
+
+
+def article_invariant_errors(
+    article: dict,
+    fetch=None,
+    published_corpus: list[dict] | None = None,
+) -> list[str]:
     """All write/publish invariants for a Strapi article row.
 
     This is the single shared gate used by the draft and daily publish lanes:
     metadata/citations, visible source coverage, opening diversity, and link
     hygiene must agree before a write or publish can proceed.
+
+    With ``published_corpus`` (the publish lane's already-fetched published
+    rows, bodyMarkdown included) the corpus-repetition gate runs too: a
+    repeated opener 3-gram or seeded-cliche overload fails alongside the shape
+    gates. Without it the gate stays inert — the draft lane's write check has
+    no body corpus in reach, and fetching one there would add a second read
+    the card forbids.
     """
     body = article.get("bodyMarkdown") or ""
     errors = check_write_invariants(
@@ -208,6 +311,9 @@ def article_invariant_errors(article: dict, fetch=None) -> list[str]:
     errors.extend(source_section_issues(body, fetch=fetch))
     errors.extend(opening_pattern_issues(body))
     errors.extend(link_hygiene_issues(body))
+    if published_corpus is not None:
+        errors.extend(corpus_repetition_issues(
+            body, published_corpus, own_slug=str(article.get("slug") or "")))
     return errors
 
 

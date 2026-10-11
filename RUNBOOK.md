@@ -164,10 +164,58 @@ State: `~/.hermes/state/nomadomics_lane_liveness.json` (single writer).
   The engine publishes a non-sensitive article when policy confidence clears and the write-time
   invariants pass: non-empty excerpt and meta, yearless slug, at least two real citations in
   a reader-visible `## Sources` section, no retired generic opener, and clean markdown links.
+  Since t_252b48e7 (2026-10-12) the publish lane ALSO passes the fetched published corpus to
+  `article_invariant_errors()`, enabling the corpus-repetition gate below; without a corpus
+  that gate stays inert (the draft lane's write check has none in reach).
   Guy can retract from the daily digest. Taxes/legal/medical/visas/banking stay quarantined.
   `publish_gate=auto-publish-under-invariants` · `veto=daily-digest` · cron_total is in
   `~/.hermes/docs/generated-canon.txt` (129 on 2026-09-23), not in this paragraph.
 <!-- canon:volatile:end -->
+
+### Corpus-repetition gate + LLM style judge (t_252b48e7, 2026-10-12)
+
+Guy MCQ verdict: BOTH mechanisms. Evidence: "Picture this, you" opened 13 published
+articles identically; "vibrant" appears in 29 of 50 published articles; the retired
+regex banned only two named openers.
+
+- **N-gram corpus-repetition gate** (`engine/invariants.py`,
+  `corpus_repetition_issues` + `cliche_issues`, deterministic):
+  - Any opener 3-gram (first ~6 words, lowercased) already used by >= 2 published
+    articles fails as a repeated opener template. Inert below 3 usable corpus
+    bodies; the article's own row is excluded.
+  - A seeded cliché census (`vibrant, boasts, nestled, hidden gem, look no
+    further, game-changer, when it comes to`) fails a draft carrying >= 2
+    DISTINCT seeded phrases (`cliche density over threshold`, with per-phrase
+    hit counts in the message). Thresholds are module constants
+    (`CLICHE_MAX_PER_ARTICLE`, `OPENER_WORD_WINDOW`, `OPENER_NGRAM_SIZE`,
+    `OPENER_MIN_CORPUS`).
+  - Wired into `article_invariant_errors(published_corpus=...)`: the 13:00
+    publisher fetches the corpus ONCE per run (the same published-layer read the
+    internal-link backstop needs) and passes it for candidate selection, the
+    blocked-reason diagnostic, and the winner's re-check. No new state file, no
+    second writer, no extra request.
+- **LLM style judge** (`engine/publish.py`, `style_judge_gate`, per new draft
+  before the publish write): one bounded pass comparing the FINAL body against
+  `engine/writer/prompts/voice_exemplar.md` with a strict-JSON verdict
+  `{cliche_flags, voice_match: pass|fail, reasons}`. Runs on the same edit
+  chain the polish pass uses, under its own 120s StageBudget, one attempt per
+  hop, no blind retries. FAILS CLOSED on transport error, parse failure, or an
+  ambiguous verdict — a judge outage keeps the article in review for the next
+  run. Blocks are journaled as `publish_refused_style_judge` in
+  `engine/state/publish-pipeline.jsonl` (same event family as
+  `publish_refused_link_hygiene`). Dry runs skip the judge (no polish there, so
+  the body judged would not be the body published).
+- Provider keys never print: the judge posts via the existing
+  `endpoint_for`/`headers_for` helpers (headers hold the key in the request
+  only; pytest output masks it).
+
+Verification:
+
+```bash
+cd ~/nomadomics-v2
+env -u PYTHONPATH .venv/bin/python -m pytest engine/tests/test_repetition_gate.py -q
+env -u PYTHONPATH .venv/bin/python -m pytest engine/tests/ -q   # full suite
+```
 
 ### Content-quality gates (canonized 2026-10-11 — slide-6 audit)
 
@@ -682,3 +730,38 @@ PREVENTION (commit 80e23af, engine tests 476 passed / 2 skipped):
 - KNOWN DEBT (needs Guy's review window, NOT done here): the whole-table
   publishedAt backfill — nomadomics_repair_dates.py dry run reports 44 documents
   of September-era re-stamp drift. Bulk mutation of the content DB = Guy sign-off.
+
+## 2026-10-12 — Corpus-repetition gate (n-gram + cliche census) + LLM style judge (t_252b48e7) — HEPHAESTUS
+
+**Symptom:** the 2026-10-12 audit (Guy MCQ: BOTH mechanisms) showed generalized
+repetition the regex gates could not see: "Picture this, you" opened 13
+published articles identically, "vibrant" appeared in 29 of 50 published
+articles, and `opening_pattern_issues` banned only two literal prefixes.
+
+**Fix (both mechanisms):**
+1. `engine/invariants.py` — `corpus_repetition_issues()`: any opener 3-gram
+   (first ~6 words) shared by >= 2 published articles fails; `cliche_issues()`:
+   a seeded 7-phrase census fails a draft with >= 2 DISTINCT seeded phrases.
+   Both wired through `article_invariant_errors(published_corpus=...)`; the
+   13:00 publisher fetches the corpus ONCE per run and passes it to candidate
+   selection, the blocked-reason diagnostic, and the winner re-check (no new
+   state file, no extra request). The draft lane's write gate stays corpus-less
+   (inert repetition gate) by design — it has no body corpus in reach.
+2. `engine/publish.py` — `style_judge_gate()`: one bounded LLM pass (edit
+   chain, 120s StageBudget, one attempt per hop) judging the FINAL body against
+   `engine/writer/prompts/voice_exemplar.md` for strict-JSON
+   `{cliche_flags, voice_match, reasons}`. Fail-closed on transport/parse/
+   ambiguity; refuses BEFORE the Strapi write; blocks journal as
+   `publish_refused_style_judge`. Dry runs skip it (unpolished body there).
+
+**Verification:** full engine suite 503 passed / 2 skipped (clean checkout run
+below, pre-push); `test_repetition_gate.py` 25 cases cover duplicate-opener
+fail, unique pass, cliche threshold, own-slug exclusion, judge pass/fail/
+malformed-JSON fail-closed, publish_one refusal wiring. Live corpus probe:
+49/49 published rows serve bodyMarkdown (gate is live), zero existing opener
+3-grams at count >= 3 (healthy opener diversity), 5/49 legacy rows would fail
+the NEW cliche threshold (left as-is — no bulk rewrite of history).
+
+**Status:** closed (implementation); watch the next 13:00 run for the first
+gated publish. Tests: `engine/tests/test_repetition_gate.py`; RUNBOOK gates
+section documents both mechanisms.

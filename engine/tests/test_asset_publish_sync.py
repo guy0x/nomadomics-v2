@@ -214,6 +214,10 @@ def _ready_article():
 def _publish(monkeypatch, *, page_code, asset_code, push_result=(True, "pushed 2 commit(s)"), client=None):
     """Run the real publish_one with the network + side effects stubbed."""
     monkeypatch.setattr(publish, "polish_article", lambda *a, **k: None)
+    # The LLM style judge (t_252b48e7) is an external call like polish; these
+    # tests exercise post-Strapi shipping, so it passes as a stub. Its own
+    # verdict/budget behavior is covered in test_style_judge.py.
+    monkeypatch.setattr(publish, "style_judge_gate", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(publish, "generate_cover", lambda slug, title, **k: True)
     monkeypatch.setattr(publish, "list_published", lambda client, **k: [])
     monkeypatch.setattr(publish, "write_slug_snapshot", lambda slugs: False)

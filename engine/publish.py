@@ -126,6 +126,179 @@ COVER_TIMEOUT_SECONDS = 180.0
 # Last-resort polish model (paid but pennies) — used when the free chain fails.
 CAKE_CHAT_MODEL = "z-ai/glm-5.3-flash"
 
+# --- LLM style judge (t_252b48e7, 2026-10-12) ---------------------------------
+# Second mechanism of the repetition gate: one bounded LLM pass per new draft,
+# comparing it against the voice exemplar. Runs on the SAME verified edit lane
+# the polish pass uses (Gemini account route, or the OpenRouter hop when no
+# Gemini key), under its own StageBudget, one attempt per hop, no retries
+# beyond that and never a blind loop. Strict JSON verdict; any transport,
+# parse, or ambiguity failure FAILS CLOSED (the article stays in review) — a
+# style gate must never wave a draft through because its judge was unavailable.
+STYLE_JUDGE_STAGE = "style_judge"
+STYLE_JUDGE_BUDGET_SECONDS = 120.0
+STYLE_JUDGE_EXEMPLAR = Path(__file__).resolve().parent / "writer" / "prompts" / "voice_exemplar.md"
+STYLE_JUDGE_SYSTEM = (
+    "You are the Nomadomics style judge. Compare the ARTICLE DRAFT against the "
+    "VOICE EXEMPLAR and flag travel-corporate cliche and voice drift. Judge "
+    "only what the exemplar defines: opener shape, tone, sentence rhythm, "
+    "register. Do not judge factual accuracy or SEO. Return STRICT JSON only, "
+    "no markdown fences, exactly this shape:\n"
+    '{"cliche_flags": ["..."], "voice_match": "pass" | "fail", "reasons": ["..."]}\n'
+    'voice_match is "pass" only when the draft reads like the exemplar\'s '
+    "voice with no repeated cliche pattern; when in doubt, fail."
+)
+# The exemplar is read once per process; an unreadable file yields "" and the
+# judge still runs (and still fails closed on ambiguity) rather than the gate
+# disappearing on a partially-restored checkout.
+_style_judge_exemplar_cache: str | None = None
+
+
+def _style_judge_exemplar() -> str:
+    global _style_judge_exemplar_cache
+    if _style_judge_exemplar_cache is None:
+        try:
+            _style_judge_exemplar_cache = STYLE_JUDGE_EXEMPLAR.read_text()
+        except OSError:
+            _style_judge_exemplar_cache = ""
+    return _style_judge_exemplar_cache
+
+
+def _build_style_judge_prompt(body: str) -> str:
+    return (
+        "=== VOICE EXEMPLAR ===\n"
+        f"{_style_judge_exemplar()}\n\n"
+        "=== ARTICLE DRAFT (markdown) ===\n"
+        f"{body}\n\n"
+        "Judge the draft now and return the STRICT JSON verdict."
+    )
+
+
+def _parse_style_judge(content: str) -> dict | None:
+    """Strict-JSON verdict parser. Anything ambiguous returns None (fail closed).
+
+    A verdict only counts when it parses to a dict carrying a literal
+    ``voice_match`` of "pass" or "fail". Missing/shape-broken cliche_flags and
+    reasons normalise to [].
+    """
+    text = (content or "").strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.S | re.I)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, flags=re.S)
+        if not m:
+            return None
+        try:
+            parsed = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(parsed, dict):
+        return None
+    verdict = str(parsed.get("voice_match") or "").strip().lower()
+    if verdict not in ("pass", "fail"):
+        return None
+    flags = parsed.get("cliche_flags")
+    reasons = parsed.get("reasons")
+    if not isinstance(flags, list):
+        flags = []
+    if not isinstance(reasons, list):
+        reasons = []
+    return {
+        "cliche_flags": [str(f) for f in flags],
+        "voice_match": verdict,
+        "reasons": [str(r) for r in reasons],
+    }
+
+
+def style_judge_gate(article: dict, cfg: Config | None = None) -> dict:
+    """Run the LLM style judge on one draft; FAIL CLOSED on any uncertainty.
+
+    Returns ``{"ok": True, "verdict": ...}`` when the judge passes, else
+    ``{"ok": False, "errors": ["style judge: ..."]}``. The walk reuses the
+    existing stage-budget ladder pattern (llm.StageBudget + one attempt per
+    hop, llm.is_retryable_status discipline) — no blind retries beyond the
+    chain, and provider keys stay inside the request (headers_for never logs
+    them).
+    """
+    body = article.get("bodyMarkdown") or ""
+    if not body.strip():
+        return {"ok": False, "errors": ["style judge: empty body"]}
+    cfg = cfg if cfg is not None else load_config()
+
+    payload: dict = {
+        "model": None,
+        "messages": [
+            {"role": "system", "content": STYLE_JUDGE_SYSTEM},
+            {"role": "user", "content": _build_style_judge_prompt(body)},
+        ],
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    verdict: dict | None = None
+    client = httpx.Client(timeout=LLM_TIMEOUT)
+    budget = StageBudget(
+        STYLE_JUDGE_STAGE, seconds=STYLE_JUDGE_BUDGET_SECONDS, max_attempts=2
+    )
+    try:
+        for entry in stage_chain(cfg, "edit"):
+            if budget.expired():
+                print(
+                    f"  ! style-judge budget exhausted ({budget.exhaustion_reason()})",
+                    file=sys.stderr,
+                )
+                break
+            if not budget.take():
+                break
+            provider, model_id = resolve(cfg, entry)
+            base_url, _ = endpoint_for(cfg, provider)
+            headers = headers_for(cfg, provider)
+            payload["model"] = model_id
+            started = time.monotonic()
+            try:
+                resp = client.post(
+                    f"{base_url}/chat/completions", json=payload, headers=headers
+                )
+                if resp.status_code == 429:
+                    budget.note(provider, model_id, "429 rate-limited — skipping hop", started)
+                    time.sleep(2)
+                    continue
+                if not is_retryable_status(resp.status_code):
+                    budget.note(provider, model_id, f"{resp.status_code} non-retryable — skipping hop", started)
+                    continue
+                resp.raise_for_status()
+                verdict = _parse_style_judge(
+                    resp.json()["choices"][0]["message"]["content"]
+                )
+                if verdict is not None:
+                    budget.note(provider, model_id, "200 ok (style verdict)", started)
+                    break
+                budget.note(provider, model_id, "200 but unparseable style verdict", started)
+            except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, KeyError) as e:
+                budget.note(provider, model_id, f"error {type(e).__name__}", started, extra=f" — {e}")
+                continue
+    finally:
+        client.close()
+
+    if verdict is None:
+        # Fail closed: no usable verdict from any hop blocks the publish.
+        return {
+            "ok": False,
+            "errors": ["style judge: no usable verdict (fail closed)"],
+        }
+    if verdict["voice_match"] != "pass":
+        return {
+            "ok": False,
+            "errors": [
+                "style judge: voice_match=fail — "
+                + ("; ".join(verdict["reasons"][:3]) or "no reasons given")
+            ],
+            "verdict": verdict,
+        }
+    return {"ok": True, "verdict": verdict}
+
+
 POLISH_SYSTEM = """You are the Nomadomics final-publish editor. The article passed
 research + draft + edit stages and is structurally sound, well-voiced, and
 fact-grounded. Your job is a NARROW pre-publish tightening — do NOT rewrite or
@@ -1021,6 +1194,24 @@ def publish_one(
     journal = journal_quarantined_docids()
     approvals = release_approved_docids()
 
+    # Corpus-repetition gate (t_252b48e7): the published corpus is fetched ONCE
+    # here (with bodies) and shared by candidate selection, the blocked-reason
+    # diagnostic, and the winner's invariant re-check. No extra request, no new
+    # state file. An empty corpus degrades to an inert gate, like the
+    # internal-link backstop. The getattr guard mirrors pipeline_cli: test
+    # doubles and any client predating list_published_titles must not fail.
+    published_corpus: list[dict] = []
+    if getattr(client, "list_published_titles", None) is not None:
+        published_corpus = client._request(
+            "GET",
+            "/api/articles",
+            params={
+                "filters[status][$eq]": "published",
+                "sort": "publishedAt:desc",
+                "pagination[pageSize]": "200",
+            },
+        ).get("data", [])
+
     cover_mode = (os.environ.get("NOMADOMICS_COVER_MODE") or "gemini-browser").strip().lower()
     browser_only = cover_mode in {"gemini-browser", "browser", "nano-banana"}
     cover_blocked: list[str] = []
@@ -1040,7 +1231,8 @@ def publish_one(
             continue
         # Ratified E: confidence is not enough. Excerpt, meta, a yearless slug,
         # and two real citations have to hold or this article stays in review.
-        if article_invariant_errors(a):
+        # With the corpus fetched above, the repetition gate runs too.
+        if article_invariant_errors(a, published_corpus=published_corpus):
             continue
         if browser_only:
             ready, reason = browser_asset_ready(str(slug))
@@ -1068,7 +1260,7 @@ def publish_one(
                 continue
             if int(a.get("confidence") or 0) < MIN_CONFIDENCE:
                 continue
-            errors = article_invariant_errors(a)
+            errors = article_invariant_errors(a, published_corpus=published_corpus)
             if errors:
                 invariant_blocked.append(f"{a.get('slug')} ({'; '.join(errors)})")
         blocked_suffix = (
@@ -1156,6 +1348,29 @@ def publish_one(
         }
     new_meta_title = (polished.get("metaTitle") if polished else winner.get("metaTitle")) or ""
     new_meta_desc = (polished.get("metaDescription") if polished else winner.get("metaDescription")) or ""
+    # LLM style judge (t_252b48e7): one bounded pass per new draft, on the same
+    # edit chain the polish pass uses. Runs AFTER the final body is known (it
+    # judges the markdown actually published) and BEFORE any Strapi write, so a
+    # fail never leaves a half-updated row. Real writes only: a --dry-run
+    # rehearsal skips polish, so its body is the pre-polish draft and a judge
+    # verdict there would neither predict the real run nor justify the tokens.
+    # Fail closed — a judge outage keeps the article in review for the next
+    # run, it never waves it through.
+    if not dry_run:
+        judge = style_judge_gate({"bodyMarkdown": new_md}, cfg)
+        if not judge.get("ok"):
+            judge_errors = judge.get("errors") or ["style judge: unknown failure"]
+            _append_state({
+                "ts": _now_iso(),
+                "event": "publish_refused_style_judge",
+                "slug": slug,
+                "errors": judge_errors,
+            })
+            return {
+                "event": "skip",
+                "slug": slug,
+                "reason": f"style judge blocked publish: {'; '.join(judge_errors)}",
+            }
     # Enforce Strapi schema length caps (LLM can overshoot). Trim at a word
     # boundary with no ellipsis: "..." spends three of the characters and leaves a
     # snippet that reads as broken, so a hard cut at 57 + "..." produced meta
