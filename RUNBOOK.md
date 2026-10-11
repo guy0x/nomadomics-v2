@@ -18,6 +18,18 @@ auto-restarts if it crashes. No need to manually `npm run dev` anymore.
 Config: `~/Library/LaunchAgents/com.nomadomics.strapi.plist`
 Logs: `~/nomadomics-v2/logs/strapi-{service.log,service.err}`
 
+## Productization roadmap (2026-10-10)
+
+The active hardening roadmap is `~/.hermes/plans/2026-10-10_225256-nomadomics-productization-roadmap.md`.
+The P0 contract is `~/nomadomics-v2/docs/PRODUCT-CONTRACT.md`; the dated baseline is
+`~/nomadomics-v2/docs/PRODUCT-BASELINE-2026-10-10.md`. Execute phases one at a time and
+use fresh command output for live decisions. Do not infer current state from dated counts in
+this runbook or the historical launch checklist.
+
+The launch checklist at `~/.hermes/plans/nomadomics/2026-09-19_nomadomics-launch-checklist.md`
+remains the historical launch-gate record. It is not a substitute for the productization
+roadmap or a fresh probe.
+
 ## Content API tokens (rotated 2026-09-10)
 
 Token plaintexts live only in `.env` (engine) and `frontend/.env.local` (frontend) — never in git. The frontend uses a dedicated **read-only** token (`frontend-read`); the engine uses `engine-write`. To rotate a token without the admin UI: generate `secrets.token_hex(64)` in Python, store `HMAC-SHA512(key=API_TOKEN_SALT, msg=<plaintext>)` as hex in `strapi_api_tokens.access_key` (`encrypted_key` may be NULL — it is unused because `ADMIN_ENCRYPTION_KEY` is not set), update the matching `.env` file, restart Strapi if its own env changed. The old `.env.strapi`-era credentials (DB password, salts, JWT secrets, original API tokens) were exposed in git history before commit `5a9eb13` and were fully rotated on 2026-09-10; Vercel's `STRAPI_API_TOKEN` (Production) was swapped and redeployed the same day.
@@ -109,57 +121,136 @@ default write leaves that layer byte-identical, then removes the fixture. The
 delete**), so cleanup drops the rows at the DB level via `psql` + the repo's
 `DATABASE_*` values; without those the test skips instead of leaking rows.
 
-## Gemini content pipeline (2026-08-29)
+## Gemini content pipeline (canonized 2026-10-11)
 
-Research → draft → edit all run on **Gemini 2.5 Flash** (primary) via the
-OpenAI-compatible endpoint, with OpenRouter `:free` models as fallback chain.
-Key: `GEMINI_API_KEY` in the gitignored `.env` (never logged).
+Research → draft → edit use the account-backed **Gemini Flash Lite** text lane
+(`gemini-flash-lite-latest`) through the OpenAI-compatible endpoint. The engine
+reads credentials from the gitignored `.env`; values are never logged. A configured
+Gemini stage is isolated to that verified route: it does not burn time on the
+unverified OpenRouter `:free` list after a Gemini failure. The OpenRouter chain
+remains available only when a stage explicitly selects it or the Gemini key is
+absent; non-retryable `400/401/402/403/404/422` failures skip a hop instead of
+burning retries.
 
-- Stage map: `engine/research/` → `engine/writer/` → `engine/editor/` → `engine/seo/analyze.py`
-  (deterministic scorer incl. a **structure score**: tables/bullets/H3/pros-cons feed
-  `seo_score`, so walls of prose score lower than structured drafts).
+- Stage map: `engine/research/` → `engine/writer/` → `engine/editor/` → `engine/seo/analyze.py`.
+- The writer sends an explicit `max_tokens=6000` budget so Gemini does not return
+  an HTTP 200 with an empty structured draft; an empty/malformed 200 skips that
+  hop rather than retrying the same provider blindly.
+- The browser account is the **only route for new cover images**. Nano Banana is
+  driven through the supervised Brave CDP session on `127.0.0.1:9333`; session-
+  scoped image URLs are never logged or persisted.
+- The cover worker downloads the full-size browser artifact, writes only
+  `1200x675` card and `1200x630` OG PNGs, caps each derivative at `500,000`
+  bytes, runs independent local vision QA, and records hashes/dimensions/verdict
+  in `~/.hermes/state/nomadomics_gemini_assets.json`. It refuses to overwrite
+  an existing public pair and fails closed on uncertainty.
+- `engine/publish.py` accepts a cover only when that browser receipt is present
+  and re-verifies provider, status, dimensions, byte sizes, and hashes. No
+  receipt means no publish. The draft lane applies the same receipt check before
+  writing a published-layer status; absent a receipt it leaves the article in
+  `in_review` for the next worker/publish window.
+
+Health probe (same config, both research and draft stages):
+```
+env -u PYTHONPATH .venv/bin/python /Users/guy/.hermes/scripts/nomadomics_lane_smoke.py --json
+```
+State: `~/.hermes/state/nomadomics_lane_liveness.json` (single writer).
+
+- Structure contract lives in the writer + editor prompts (bullets under every H3,
+  comparison tables, Pros/Cons, Bottom Line, FAQ) — output renders via the frontend's
+  react-markdown GFM renderer.
 <!-- canon:volatile:start -->
 - Publish gate (ratified E, 2026-09-23): auto-publish under invariants, veto in the daily digest.
   The engine publishes a non-sensitive article when policy confidence clears and the write-time
-  invariants pass (non-empty excerpt and meta, yearless slug, at least two real citations).
+  invariants pass: non-empty excerpt and meta, yearless slug, at least two real citations in
+  a reader-visible `## Sources` section, no retired generic opener, and clean markdown links.
   Guy can retract from the daily digest. Taxes/legal/medical/visas/banking stay quarantined.
   `publish_gate=auto-publish-under-invariants` · `veto=daily-digest` · cron_total is in
   `~/.hermes/docs/generated-canon.txt` (129 on 2026-09-23), not in this paragraph.
 <!-- canon:volatile:end -->
-- Structure contract lives in the writer + editor prompts (bullets under every H3,
-  comparison tables, Pros/Cons, Bottom Line, FAQ) — output renders via the frontend's
-  react-markdown GFM renderer.
 
-## Daily batch cron (STAGED — NOT ARMED)
+### Content-quality gates (canonized 2026-10-11 — slide-6 audit)
 
-Command (when Guy approves):
+These are prevention gates for **new writes and publish candidates**. They do not
+bulk-rewrite the historical corpus; remediation of existing pages is a separate,
+reviewed migration.
+
+- **Visible provenance:** `ensure_body_citations()` in `engine/invariants.py`
+  guarantees two real research links and a reader-visible `## Sources` section.
+  Source links must be proper markdown links; placeholder, unreachable, and
+  host-mismatched URLs never qualify.
+- **Opening diversity:** `opening_pattern_issues()` rejects the retired generic
+  `Picture this` / `Imagine this` prefixes. The writer prompt and voice exemplar
+  require a topic-specific money frame, counterintuitive claim, reader decision,
+  or genuinely specific scene instead.
+- **Link hygiene:** `link_hygiene_issues()` is wired into the shared
+  `article_invariant_errors()` gate. Bare URLs, plain parenthesized URLs,
+  hyphenated-slug anchors, and wrong-domain slug links block the write/publish.
+- **Shared enforcement:** `pipeline_cli.py` and `publish.py` call the same
+  `article_invariant_errors()` implementation; a passing model score cannot
+  bypass these deterministic checks.
+- **Prompt prevention:** `engine/writer/writer.py` and
+  `engine/writer/prompts/voice_exemplar.md` state the same opening and source
+  requirements so generation is steered before deterministic rejection.
+
+Verification:
+
+```bash
+cd ~/nomadomics-v2/engine
+env -u PYTHONPATH ../.venv/bin/python -m pytest tests/test_content_quality.py tests/test_body_citations.py tests/test_link_hygiene.py -q
 ```
-cd ~/nomadomics-v2 && env -u PYTHONPATH .venv/bin/python -m engine.cli run-batch 2
-```
-Schedule: `0 9 * * 0-5` (09:00 Sun–Fri, Saturday off) → drafts land `in_review` +
-Telegram notify. **Do not create while testing:** the gateway is running, so a created
-cron fires immediately.
+
+## Daily content-production cadence (ARMED 2026-10-11)
+
+The engine now runs every day, including Saturday and Sunday. The draft lane
+writes reviewable/in-review articles; an AUTO_PUBLISH policy decision is still
+held in `in_review` until the supervised browser-cover receipt exists; the retry
+lane is guarded and bounded; the publish lane promotes at most one article per
+UTC day after the browser-cover receipt gate passes. The cover worker also scans
+published articles that are missing a public pair so old artifact gaps can be
+repaired without overwriting existing assets.
+
+- `f965b83c176a` `nomadomics-draft-batch`: `0 9 * * *`, enabled, no-agent,
+  `~/.hermes/scripts/nomadomics_daily_draft.sh`.
+- `ce01c7164641` guarded retry: `30 11 * * *`, enabled, no-agent,
+  `~/.hermes/scripts/nomadomics_daily_draft_retry.sh`.
+- `1ec0be772c2f` topic feeder: `0 8 * * *`, enabled, no-agent,
+  `~/.hermes/scripts/nomadomics_topic_feeder.py`.
+- `c3b70b186b0e` lane smoke: `19 */2 * * *`, enabled, no-agent, project
+  `.venv/bin/python`, `/Users/guy/.hermes/scripts/nomadomics_lane_smoke.py`.
+- `fde4be350c42` browser cover worker: `25 */2 * * *`, enabled, no-agent,
+  Hermes image venv, `/Users/guy/.hermes/scripts/nomadomics_gemini_cover_worker.py`.
+- `b9e3891806f7` `nomadomics-daily-publish`: `0 13 * * *`, enabled, no-agent,
+  `~/.hermes/scripts/nomadomics_daily_publish.sh`.
+
+The cadence is verified from `~/.hermes/cron/jobs.json`; do not edit that file
+by hand. Every entrypoint has a bounded batch/timeout contract, and provider
+`401/402/403/404` failures are not retried blindly. The browser worker is
+supervised automation: if Brave/CDP or vision QA is unavailable, the article
+remains reviewable and the publisher skips it rather than publishing without a
+receipt.
 
 ## Daily publish pipeline (ARMED 2026-09-14 — Guy sign-off)
 
-One polished article/day auto-publishes with cover art.
+One polished article/day is eligible for auto-publish, but only after the
+browser Gemini cover receipt and all existing policy/invariant gates pass.
 
 - Cron job `b9e3891806f7` "nomadomics-daily-publish" in the **default profile**
-  cron store (`~/.hermes/cron/jobs.json`), `no_agent`, deliver `telegram`.
-- Schedule `0 13 * * *` local = **10:00 UTC daily** (Guy-approved 2026-09-14),
-  one hour after the 09:00 draft batch.
+  cron store (`~/.hermes/cron/jobs.json`), `no_agent`, deliver to Pantheon
+  SIGNALS. The schedule is `0 13 * * *` local (10:00 UTC) every day.
 - Entrypoint: `~/.hermes/scripts/nomadomics_daily_publish.sh` (repo-external;
-  strips global PYTHONPATH, runs `engine.cli publish`, pushes the cover-art
-  commit, formats the Telegram notice).
-- Runner: `engine/publish.py` via `engine.cli publish` (`--dry-run`,
-  `--skip-image`, `--no-commit`). Picks highest-confidence `in_review` article
-  ≥ 75 → LLM polish (TL;DR, 2–3 internal links, meta caps; Gemini→:free chain,
-  Cake Nano `z-ai/glm-5.3-flash` fallback) → Strapi `publishedAt=now` → Cake
-  Nano HiDream 1200×630 cover → `frontend/public/{cards,og}/<slug>.png` →
-  git commit + push → live URL verification.
-- Idempotency/state: `engine/state/publish-pipeline.jsonl` (gitignored, like
-  all of `engine/state/`) — max 1 publish per UTC day, never re-publishes a
-  slug. No eligible article ⇒ skip notice, no publish.
+  strips global PYTHONPATH, sets `SITE_URL=https://www.nomadomics.blog` and
+  `NOMADOMICS_COVER_MODE=gemini-browser`, and runs `engine.cli publish`).
+- Runner: `engine/publish.py` selects the highest-confidence eligible
+  `in_review` article ≥ 75, polishes text on the Gemini Flash Lite lane, and
+  refuses the release unless the supervised browser Gemini/Nano Banana manifest
+  contains a verified receipt for that slug. The worker, not an image API,
+  produces `frontend/public/{cards,og}/<slug>.png`.
+- Idempotency/state: `engine/state/publish-pipeline.jsonl` and
+  `engine/state/publish-ledger.jsonl` remain append-only with one writer per
+  file; the lane caps publication at one article per UTC day and never
+  republishes a slug. No eligible article or missing browser receipt means a
+  reason-coded skip, not a forced publish.
 - **Quarantine gate (2026-09-20):** the draft lane stamps each article's policy
   decision as `topicDecision` on the Strapi article. The publish lane REFUSES
   any article with `topicDecision=quarantine` — it is skipped (and hard-refused
@@ -186,38 +277,37 @@ One polished article/day auto-publishes with cover art.
   cron store — the hephaestus gateway cannot fire (telegram token conflict
   with the default gateway); the default-profile job is the live one.
 
-## Cover art — provider chain (2026-09-19)
+## Cover art — supervised browser Gemini/Nano Banana (canonized 2026-10-11)
 
-`engine/publish.py` walks an ordered image chain and only gives up when every route
-is unusable:
+New cover art is generated only through Guy's logged-in Gemini browser account;
+paid image APIs and API fallback generators are not part of the release path.
+The worker is `~/.hermes/scripts/nomadomics_gemini_cover_worker.py` and runs
+under cron job `fde4be350c42` every two hours at `:25`.
 
-| # | Route | Model | Key env |
-|---|---|---|---|
-| 1 | `cake.nano-gpt.com` | `hidream` (preferred) | `HERMES_CUSTOM_CAKE_NANO_GPT_COM_API_KEY` |
-| 2 | `api.cheaperinference.com` | `nano-banana-2` | `HERMES_CUSTOM_API_CHEAPERINFERENCE_COM_API_KEY` |
+- CDP availability: `python3 ~/.hermes/scripts/gemini_cdp.py probe` (never log
+  session URLs, cookies, or image URLs).
+- Worker state: `~/.hermes/state/nomadomics_gemini_assets.json`; raw/stage files
+  live only in the librarian scratch area until a verified pair is released.
+- Release pair: card `1200x675`, OG `1200x630`, both PNG and ≤ `500,000` bytes.
+- QA: full-size browser download → deterministic dimensions/hash/byte checks →
+  independent local vision QA → exact-pair commit/push → receipt. The worker
+  never overwrites existing public assets or commits unrelated staged files.
+- Publisher: `browser_asset_ready(slug)` rechecks status, provider, hashes,
+  dimensions, and sizes immediately before any publish write. A missing or
+  malformed receipt is a hard skip.
 
-A non-retryable status (401/402/403/404) skips the hop immediately, so a locked or
-capped key no longer ends cover generation. The run prints which route served the
-image (`cover generated via <route>`); `publish-pipeline.jsonl` records
-`cover: generated|failed|skipped`.
-
-Incident this replaces: Cake hit its **weekly token cap** (`401 invalid session`).
-Note `/api/v1/models` still answers 200 without a key — it is public, so it is NOT a
-key check. Cover failure is non-fatal by design, so three consecutive posts published
-with `cover: failed` and nothing retried them. Backfill a missing cover by calling
-`publish.generate_cover(slug, title)` for that slug, then re-run the image gate and
-commit the assets.
-
-`frontend/scripts/published-slugs.json` is hand-maintained: refresh it to the live
-published set whenever an article is published outside the runner, otherwise
-`check-images` validates a stale universe (use `--live` to read Strapi instead).
+The offline checker remains useful for repository consistency:
+`cd frontend && npm run check:images`. Its live mode requires an approved
+read-only Strapi token and is not replaced by the local receipt manifest.
 
 ## Kill switch (<60s)
 
 - `launchctl unload ~/Library/LaunchAgents/com.nomadomics.strapi.plist` — halts Strapi.
 - To quarantine a bad article: set `status` back to `draft` via Strapi admin or API
   (the engine token has `update` but NOT `delete` — by design, quarantine not destroy).
-- Models are free-only (`:free`) until Guy flips `PREMIUM_MODEL_ENABLED` in `.env`.
+- Text generation uses the account-backed Gemini Flash Lite route; browser Nano
+  Banana covers are account-backed. Do not enable a paid image API as an
+  emergency shortcut. The hard cover-receipt gate is the rollback-safe behavior.
 
 ## Cloudflare Tunnel — stable public API (strapi.nomadomics.blog)
 
@@ -237,6 +327,27 @@ Config: `~/.cloudflared/config.yml` · Credentials: `~/.cloudflared/*.json` (SEC
 Migration note: on Hetzner cutover, install cloudflared on the VPS with the same
 tunnel ID + ingress (`service: http://strapi:1337`), then remove the local LaunchAgent.
 Public URL never changes; Vercel env untouched.
+
+## Vercel build-failure recovery (verified 2026-10-11)
+
+The canonical production project is `nomadomics-v2`, rooted at `frontend/`. A
+production deployment is only recovered when `vercel inspect <deployment>` shows
+`status Ready` and the canonical aliases are attached. The 2026-10-11 failures
+were control-plane/origin failures during Next.js page-data collection, not a
+TypeScript or frontend build error:
+
+- the canonical project received a Cloudflare `530` while fetching Strapi;
+- a stale duplicate project, `frontend-jh2g`, had only Strapi server secrets and
+  no frontend `STRAPI_URL`, so its build fell back to `127.0.0.1:1337` and failed
+  with `ECONNREFUSED`;
+- recovery order: restore/check `com.nomadomics.cloudflared`, redeploy the
+  canonical `nomadomics-v2` project, inspect the resulting production deployment,
+  then leave the duplicate project for a separate retire-or-reconfigure decision.
+
+Never treat the duplicate project as production and never delete it during an
+incident without an explicit owner decision. Email details remain unreadable when
+`email_access_gate.py` denies the librarian profile; use the Vercel deployment
+logs and this runbook as the evidence source instead.
 
 ## Vercel frontend env contract
 
@@ -371,6 +482,51 @@ Out of scope, honored: F-05 (CLOSED BY DECISION — hidream-era 675s accepted),
 F-07/F-11 (deferred pending true denominator measurement), F-01 (self-healed,
 no purge — declined in report), F-03 (passes; untouched this round).
 
+## 2026-10-08 — Sitemap-vs-published integrity invariant (QA F-01) — HEPHAESTUS
+
+**Defect (reproduced live at implementation time):** the production sitemap
+advertised `cost-of-living-cape-town-nomads` while live Strapi returned that
+article as `in_review` and the production URL returned 404 — a stale Vercel ISR
+render (`age: 41655`, `x-vercel-cache: HIT`). Reproduction: 59 sitemap locs, 1
+non-200; live published total 46; feed total 46. The sitemap is generated by
+the Next.js frontend from `getPublishedArticles()` (`filters[status][$eq]=published`,
+`frontend/src/app/sitemap.ts`, `revalidate = 3600`), so the stale entry was a
+cached render from before the withdrawal.
+
+**Fix: a read-only regression invariant** at `engine/sitemap_integrity.py` that
+compares the LIVE sitemap's article-URL set against the LIVE published Strapi
+slug set, names both sets in its output, and exercises every sitemap-emitted
+article URL for HTTP 200. Wired as a CLI command.
+
+Exact invocation (from `~/nomadomics-v2`, engine venv):
+
+```
+env -u PYTHONPATH .venv/bin/python -m engine.cli sitemap-check
+env -u PYTHONPATH .venv/bin/python -m engine.sitemap_integrity [--url <sitemap-url>]
+```
+
+Exit codes:
+- `0` — PASS: every sitemap article URL is in the live published set and returns HTTP 200.
+- `1` — FAIL (stale sitemap): a sitemap-only slug and/or an emitted article URL is not HTTP 200.
+- `2` — dependency UNAVAILABLE: sitemap unreachable/non-200/empty, or the CMS
+  errored/401'd/returned ZERO rows. An unauthenticated/empty CMS response is
+  NEVER interpreted as "zero published articles" (fail-closed, never fail-open).
+
+Named sets in output: `sitemap_article_slugs`, `published_article_slugs`,
+`sitemap_only` (a failure), `published_only` (informational — a just-published
+article lags the sitemap until the hourly ISR revalidate), plus a `non200`
+line per failed URL. Both absolute and site-relative `<loc>` values are parsed;
+`www.` vs apex hosts compare equal. Read-only: never writes Strapi, never
+changes publication status.
+
+Tests: `engine/tests/test_sitemap_integrity.py` (20 tests — failing case, clean
+matching case, unavailable-dependency behaviour, absolute/relative URL
+handling, empty-CMS refusal). Run:
+```
+cd ~/nomadomics-v2/engine && env -u PYTHONPATH ../.venv/bin/python -m pytest tests/test_sitemap_integrity.py -q
+```
+Full engine suite at implementation time: 454 passed, 2 skipped.
+
 ## 2026-10-07 — auto-publish routing defect: app status ≠ publish layer (t_8e96e368) — HEPHAESTUS
 
 Investigation of "the Berlin article was auto-published despite being `in_review`".
@@ -445,3 +601,34 @@ invariant in `nomadomics_content_invariants` that fails when published-layer row
 non-published app status, so the 19-row drift cannot grow unnoticed; and either an
 admin-side unpublish step in the release runbook or content-level sensitivity detection
 (body scan) in place of the category-only `is_sensitive()`.
+
+## 2026-10-08 — F-01 root cause: sitemap metadata route frozen on Vercel ISR — HEPHAESTUS (t_9ff8eb75, commit 19deb3f)
+
+**Mechanism.** The sitemap was `app/sitemap.ts`, a Next **metadata route**. Its XML
+artifact was statically rendered at deploy time (prod `last-modified: 07:46:01Z` = the
+`454be79` deploy), and its route-level ISR revalidation never fired on Vercel: prod
+served the same etag `360081ee…` with `age` climbing 41,655s → 43,445s under repeated
+requests. So the sitemap kept advertising `cost-of-living-cape-town-nomads` after the
+article moved to `in_review` (URL → 404). The sibling `/feed.xml` **plain route
+handler** with the same `getPublishedArticles()` data dep and `revalidate = 3600` kept
+revalidating correctly (46 items, age 237s) — the handler shape works on this stack;
+the metadata route's outer artifact did not regenerate.
+
+**Fix (commit 19deb3f, deploy 20:05:30Z).** Sitemap is now a plain route handler
+`frontend/src/app/sitemap.xml/route.ts` — `export const revalidate = 3600`,
+`Cache-Control: s-maxage=3600, stale-while-revalidate`, XML built per-request by the
+pure builder `src/lib/sitemapXml.ts` (byte-compatible serialization; covered by
+`src/lib/sitemapXml.test.ts` under `npm test`). The metadata route `app/sitemap.ts`
+was deleted. Emitted URL set/format unchanged (loc host from the same
+`NEXT_PUBLIC_SITE_URL`). Local build: lint 0, tests 24/24, `/sitemap.xml` in the same
+ISR class as `/feed.xml` in the build output.
+
+**Production verification (2026-10-08 20:12Z).** Sitemap 200, new etag
+`4f369793…`, `last-modified: 20:05:30Z`, age reset from 43,445s → 454s; 58 `<loc>`,
+0 cape-town; all 58 URLs fetched with redirects → `non200 0`; the Cape Town URL still
+404s (correct — not published); live Strapi still reports it `in_review`
+(`publishedAt` 07:25:12Z untouched); sitemap article URLs 46 == live published set 46.
+
+If a stale-sitemap finding ever recurs: check the latest Vercel deployment first, and
+confirm `/sitemap.xml` is still served by the route handler (not a metadata route) —
+plus ATHENA's sitemap-vs-published invariant (t_84a1fa68).

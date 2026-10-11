@@ -109,7 +109,7 @@ def test_draft_one_chains_stages_and_writes_article(monkeypatch):
         lambda *a, **k: ArticleDraft(
             markdown=(
                 "# FEIE Guide for Digital Nomads in 2025\n\n"
-                "Picture this: the taxman.\n\n"
+                "The FEIE can reduce taxable foreign earnings when you meet the test.\n\n"
                 "## The FEIE Basics\n"
                 "The FEIE allows expats to exclude up to $126,500.\n"
                 "## Physical Presence Test\n"
@@ -176,7 +176,7 @@ def test_draft_one_chains_stages_and_writes_article(monkeypatch):
 def _make_high_conf_draft():
     body = (
         "# Best eSIM Travel Plans for Budget Digital Nomads in 2026\n\n"
-        "Picture this: you land in Tokyo, and eSIM travel saves you $100 per border. "
+        "Roaming can cost $50 per trip; eSIM travel changes the arithmetic. "
         "Here's the thing — roaming is a scam you don't have to pay. eSIM travel for "
         "digital nomads cuts costs by 80%.\n\n"
         "## Top eSIM Plans\n"
@@ -211,14 +211,7 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
     from editor.editor import EditedDraft
     from seo.analyze import SEOReport
 
-    calls = {"cover": 0, "snapshot": 0, "commit": 0, "push": 0}
-
-    def fake_ship(_client, slug, title):
-        calls["cover"] += 1
-        assert slug == "esim-plans" and title
-        return "generated"
-
-    monkeypatch.setattr(pipeline_cli, "_ship_cover_art", fake_ship)
+    monkeypatch.setattr(pipeline_cli, "browser_asset_ready", lambda slug: (True, "fixture receipt"))
 
     monkeypatch.setattr(
         pipeline_cli, "research_topic",
@@ -272,17 +265,15 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
     # topic marked published
     assert client.topic_updates[-1][1].get("status") == "published"
 
-    # t_2c07d324: auto-publish must ship cover art with the article —
-    # exactly once, and journaled on the article_created row so the trial
-    # monitor can always explain a later art failure from state.
-    assert calls["cover"] == 1
+    # The browser worker's verified receipt is the only cover evidence accepted
+    # by the draft lane's auto-publish branch.
     rows = [json.loads(line) for line in pipeline_cli.STATE_FILE.read_text().splitlines() if line.strip()]
     created = [r for r in rows if r["event"] == "article_created"]
-    assert created and created[-1].get("cover") == "generated"
+    assert created and created[-1].get("cover") == "browser-receipt"
 
 
-def test_draft_one_autopublishes_under_invariants_when_flag_off(monkeypatch, tmp_path):
-    """Ratified E: the env flag is not the gate. Invariants are."""
+def test_draft_one_blocks_autopublish_without_browser_receipt(monkeypatch, tmp_path):
+    """A high-confidence draft stays reviewable until Nano Banana releases art."""
     client = FakeStrapi()
     client.topic["attributes"].update({"slug": "esim-plans", "category": "gear", "primaryKeyword": "eSIM travel"})
     cfg = Config(
@@ -294,7 +285,11 @@ def test_draft_one_autopublishes_under_invariants_when_flag_off(monkeypatch, tmp
     )
 
     import pipeline_cli
-    monkeypatch.setattr(pipeline_cli, "_ship_cover_art", lambda *a, **k: "generated")
+    monkeypatch.setattr(
+        pipeline_cli,
+        "browser_asset_ready",
+        lambda slug: (False, "no browser-Gemini manifest record"),
+    )
     from research.research import Fact, ResearchResult
     from writer.writer import ArticleDraft
     from editor.editor import EditedDraft
@@ -341,6 +336,9 @@ def test_draft_one_autopublishes_under_invariants_when_flag_off(monkeypatch, tmp
 
     result = draft_one(client, cfg, "esim-plans")
 
-    assert result["published"] is True
+    assert result["published"] is False
     article_statuses = [s[1].get("status") for s in client.published]
-    assert "published" in article_statuses
+    assert "published" not in article_statuses
+    assert client.published[-1][1].get("status") == "in_review"
+    assert client.published[-1][2] == "draft"
+    assert client.topic_updates[-1][1].get("status") == "in_review"

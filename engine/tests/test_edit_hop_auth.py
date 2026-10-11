@@ -1,10 +1,9 @@
 """Tests for the fail-soft edit hop (t_8db05179).
 
-Context: a dead Gemini key (HTTP 401) used to HALT the Nomadomics edit hop —
-one dead key killed the whole cron cycle. The hop now treats credential
-rejections (401/403) as a distinct ProviderAuthError class, skips to the
-fallback model, degrades to the original draft with a structured failure
-record, and emits the "Gemini key invalid - rotation needed" alarm line.
+A dead Gemini key (HTTP 401/403) must not halt the pipeline or walk an
+unverified OpenRouter free list. The edit hop records a structured auth failure,
+keeps the original draft, and emits the key-rotation alarm; an explicitly
+OpenRouter-configured stage owns its own fallback tests.
 """
 import json
 import sys
@@ -44,7 +43,7 @@ def make_cfg(**over):
 def _long_body():
     return (
         "# Best eSIM Plans for Digital Nomads in 2026\n\n"
-        "Picture this: you land in Bangkok, still half-asleep from the redeye, and your "
+        "A $50 roaming bill can disappear before your luggage hits the belt. "
         "carrier has already billed you $50 for the privilege of receiving one spam text. "
         "Roaming is a scam, and eSIMs are the loophole. A travel eSIM drops that border-crossing "
         "bill to a flat $15, sometimes less, and you never touch a plastic SIM tray again. "
@@ -137,71 +136,60 @@ def test_auth_failure_record_shape_and_alarm():
 # --- hop behavior: invalid key, fallback, degradation -------------------------
 
 
-def test_invalid_gemini_key_skips_to_fallback_hop_and_succeeds(capsys):
-    """401 on the Gemini hop -> one attempt, alarm line, fallback delivers."""
-    cfg = make_cfg(fallback_models=())  # chain: gemini primary -> OR primary only
-    client = FakeClient([
-        FakeResp(401, {"error": "invalid credentials"}),
-        FakeResp(200, {"choices": [{"message": {"content": valid_edit_json()}}]}),
-    ])
+def test_invalid_gemini_key_degrades_without_unverified_fallback(capsys):
+    """401 on Gemini -> one attempt, alarm line, original draft retained."""
+    cfg = make_cfg(fallback_models=())
+    client = FakeClient([FakeResp(401, {"error": "invalid credentials"})])
+    original = make_draft()
     e = edit_draft(
-        make_draft(), "Best eSIM Plans", "eSIM", make_research(),
+        original, "Best eSIM Plans", "eSIM", make_research(),
         config=cfg, http_client=client, max_retries=2,
     )
-    # Pipeline continues via the fallback hop
-    assert e.has_content
-    assert len(client.calls) == 2
+    assert e.markdown == original.markdown
+    assert len(client.calls) == 1
     assert "generativelanguage.googleapis.com" in client.calls[0][0]
-    assert "openrouter.ai" in client.calls[1][0]
-    # A successful fallback is NOT a degraded run
-    assert e.failure_record is None
+    assert e.failure_record is not None
+    assert e.failure_record["hops"][0]["status"] == 401
     out = capsys.readouterr().err
     assert "ALARM: Gemini key invalid - rotation needed" in out
     assert "401 auth rejected" in out
     assert "g-key" not in out
 
 
-def test_all_hops_auth_dead_degrades_with_failure_record(capsys):
-    """Every hop 401 -> original draft kept + structured failure record."""
-    cfg = make_cfg(fallback_models=())  # chain: gemini primary -> OR primary only
-    client = FakeClient([
-        FakeResp(401, {"error": "invalid credentials"}),
-        FakeResp(401, {"error": "invalid credentials"}),
-    ])
+def test_all_gemini_auth_dead_degrades_with_failure_record(capsys):
+    """A Gemini 401 keeps the original draft with one structured hop record."""
+    cfg = make_cfg(fallback_models=())
+    client = FakeClient([FakeResp(401, {"error": "invalid credentials"})])
     d = make_draft()
     e = edit_draft(d, "T", "kw", make_research(), config=cfg, http_client=client, max_retries=2)
-    # Pipeline continues on the un-edited draft
     assert e.markdown == d.markdown
     assert e.word_count == d.word_count
-    # One attempt per hop, zero retries on auth
-    assert len(client.calls) == 2
-    # Structured failure record: machine-readable, key-free
+    assert len(client.calls) == 1
     rec = e.failure_record
+    assert rec is not None
     assert rec["kind"] == "stage_degraded_auth"
     assert rec["stage"] == "edit"
     assert rec["outcome"] == "kept_original_draft"
-    assert [h["status"] for h in rec["hops"]] == [401, 401]
+    assert [h["status"] for h in rec["hops"]] == [401]
     assert rec["hops"][0]["alarm"] == "Gemini key invalid - rotation needed"
     assert "g-key" not in json.dumps(rec)
     assert "auth_failure:" in e.edit_report
     out = capsys.readouterr().err
-    # One alarm per rejected hop: the Gemini one + the generic openrouter one
-    assert out.count("ALARM: ") == 2
+    assert out.count("ALARM: ") == 1
     assert out.count("ALARM: Gemini key invalid - rotation needed") == 1
 
 
 def test_403_is_treated_as_auth_class_no_retry(capsys):
     cfg = make_cfg(fallback_models=())
-    client = FakeClient([
-        FakeResp(403, {"error": "forbidden"}),
-        FakeResp(200, {"choices": [{"message": {"content": valid_edit_json()}}]}),
-    ])
+    client = FakeClient([FakeResp(403, {"error": "forbidden"})])
     e = edit_draft(
         make_draft(), "T", "kw", make_research(),
         config=cfg, http_client=client, max_retries=2,
     )
     assert e.has_content
-    assert len(client.calls) == 2  # skipped to fallback, did not burn retries
+    assert len(client.calls) == 1
+    assert e.failure_record is not None
+    assert e.failure_record["hops"][0]["status"] == 403
     assert "ALARM: Gemini key invalid - rotation needed" in capsys.readouterr().err
 
 

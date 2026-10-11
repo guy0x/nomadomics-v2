@@ -2,9 +2,10 @@
 
 Both providers speak OpenAI's chat/completions wire format, so the research /
 writer / editor stages post identical payloads and only switch endpoint, key,
-and model id. Gemini is the primary provider (cheap flash-class models, better
-structured-output adherence); OpenRouter ``:free`` models are the fallback chain
-so a provider outage degrades instead of stopping the pipeline.
+and model id. Gemini is the canonical primary provider for this site. OpenRouter
+fallbacks remain available only for an explicitly OpenRouter-configured stage or
+when the Gemini key is absent; a configured Gemini stage never walks unverified
+free hops after a failure.
 
 Model ids are prefixed: ``gemini-*`` routes to the Gemini endpoint, everything
 else routes to OpenRouter.
@@ -537,9 +538,11 @@ def headers_for(cfg: Config, provider: str) -> dict[str, str]:
 def stage_chain(cfg: Config, stage: str) -> list[tuple[str, str]]:
     """Ordered [(provider, model_id)] chain for a pipeline stage.
 
-    stage ∈ {"research", "draft", "edit"}. Gemini primary model first (if the
-    per-stage provider is ``gemini`` and a key is set), then the OpenRouter
-    fallback chain, de-duplicated and order-preserving.
+    stage ∈ {"research", "draft", "edit"}. A configured Gemini stage is
+    intentionally isolated to its verified browser-account text route: dead or
+    unverified OpenRouter ``:free`` hops must not burn the batch after Gemini
+    fails. OpenRouter fallback chaining remains available when the stage is
+    explicitly configured for OpenRouter or when the Gemini key is absent.
     """
     stage = stage.lower()
     provider = {
@@ -562,7 +565,9 @@ def stage_chain(cfg: Config, stage: str) -> list[tuple[str, str]]:
 
     chain: list[tuple[str, str]] = []
     if provider == "gemini" and cfg.gemini_api_key:
-        chain.append(("gemini", primary_model))
+        # The verified Gemini route is the canonical lane. Do not walk the
+        # unverified/dead OpenRouter free list after a Gemini failure.
+        return [("gemini", primary_model)]
     chain.append(("openrouter", or_model))
     for m in cfg.fallback_models:
         chain.append(("openrouter", m))

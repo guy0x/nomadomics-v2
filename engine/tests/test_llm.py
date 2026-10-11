@@ -34,16 +34,10 @@ def test_provider_for_model():
     assert provider_for_model("nvidia/nemotron:free") == "openrouter"
 
 
-def test_stage_chain_gemini_primary_then_openrouter_fallback():
+def test_stage_chain_gemini_isolated_from_unverified_openrouter_fallbacks():
     cfg = make_cfg()
     chain = stage_chain(cfg, "research")
-    assert chain[0] == ("gemini", "gemini-2.5-flash")
-    # OpenRouter primary :free model + fallbacks follow, no duplicates
-    assert ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free") in chain
-    providers = [p for p, _ in chain]
-    assert providers[0] == "gemini"
-    # de-duplicated
-    assert len(chain) == len(set(chain))
+    assert chain == [("gemini", "gemini-flash-lite-latest")]
 
 
 def test_stage_chain_openrouter_only_when_no_gemini_key():

@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from config import Config
 from research.research import Fact, ResearchResult
 from writer.writer import ArticleDraft, _extract_draft, draft_article, ensure_research_cited
 
@@ -126,9 +127,20 @@ def test_draft_falls_back_to_next_model():
         FakeResp(500, {"error": "boom"}),
         FakeResp(200, {"choices": [{"message": {"content": sample_article_json()}}]}),
     ])
-    # config default fallback chain (nemotron-3-ultra → dots-3-note → lightning);
-    # model=None uses the chain
-    d = draft_article("X", "", make_research(), http_client=client, model=None, max_retries=0)
+    # Explicit OpenRouter configuration owns the fallback test; the production
+    # Gemini stage is intentionally isolated from unverified free hops.
+    cfg = Config(
+        strapi_url="http://localhost:1337",
+        strapi_engine_token="tok",
+        openrouter_api_key="or-key",
+        gemini_api_key="",
+        research_provider="openrouter",
+        draft_provider="openrouter",
+        edit_provider="openrouter",
+    )
+    d = draft_article(
+        "X", "", make_research(), http_client=client, model=None, config=cfg, max_retries=0
+    )
     assert d.has_content
     assert len(client.calls) == 2
 

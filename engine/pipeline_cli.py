@@ -23,6 +23,12 @@ CLI (via engine/cli.py):
                                            # [--key-file P] also fingerprints a
                                            # candidate key file (never writes
                                            # .env) — Gemini rotation verify step.
+  python -m engine.cli sitemap-check       # read-only sitemap-vs-published
+                                           # integrity invariant (QA F-01);
+                                           # exit 0 pass, 1 stale sitemap
+                                           # (sitemap-only slug and/or emitted
+                                           # article URL not HTTP 200), 2
+                                           # dependency unavailable.
 
 State: appends one JSON line per run to engine/state/pipeline.jsonl
        (single writer: this module).
@@ -50,8 +56,14 @@ from publish_ledger import record as record_publish
 from seo.analyze import analyze_seo
 from writer.writer import draft_article
 from policy.publish import Decision, apply_policy, is_sensitive
-from publish import article_decision, is_quarantined, publish_one as _publish_one_runner
+from publish import (
+    article_decision,
+    browser_asset_ready,
+    is_quarantined,
+    publish_one as _publish_one_runner,
+)
 from smoke import run_smoke as run_gemini_smoke
+from sitemap_integrity import DEFAULT_SITEMAP_URL, run_sitemap_check
 from strapi import StrapiClient, StrapiError
 
 STATE_FILE = Path(__file__).resolve().parent / "state" / "pipeline.jsonl"
@@ -926,42 +938,53 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     article_doc = article.get("data", {})
     article_id = article_doc.get("documentId")
 
-    # Publish mapping: non-sensitive AUTO_PUBLISH decisions publish once the
-    # write-time invariants have passed (ratified E). Sensitive topics are
-    # structurally quarantined (QUARANTINE -> never published here).
-    # The policy decision is ALSO stamped onto the article (`topicDecision`,
-    # 2026-09-20, t_cae3c2d2) so the publish lane can enforce the quarantine
-    # gate instead of trusting the article's status alone.
+    # Publish mapping: a non-sensitive AUTO_PUBLISH decision is still subject
+    # to the browser-Gemini cover receipt. The draft lane may create the article,
+    # but it must not write the published layer or touch a legacy/API image route
+    # when the supervised Nano Banana worker has not released the exact pair.
+    # Sensitive topics are structurally quarantined (QUARANTINE -> never published).
+    # The policy decision is stamped onto the article for the daily publish lane.
     published = False
     topic_status = "in_review"
-    # Art status for the journal (t_2c07d324): only the AUTO_PUBLISH branch
-    # ships art, so every other path records "skipped".
     cover_status = "skipped"
-    # Ratified E (2026-09-23): auto-publish when the policy says so and the
-    # write-time invariants already passed. The env flag is no longer the gate.
-    # Sensitive topics stay quarantined (they never take this branch). Guy
-    # vetoes from the daily digest; this function does not post one.
     if decision.decision == Decision.AUTO_PUBLISH:
-        # This branch IS the publish step for lane-B articles: it is the only
-        # place allowed to write the published layer (status="published").
-        client.update_article(
-            article_id,
-            {
-                "status": "published",
-                "publishedAt": _now_iso(),
-                "topicDecision": decision.decision.value,
-            },
-            status="published",
-        )
-        topic_status = "published"
-        published = True
-        record_publish(
-            {"ts": _now_iso(), "event": "published", "slug": slug, "lane": "draft"},
-            PUBLISH_LEDGER,
-        )
-        # Ship art with the article (t_2c07d324): this lane publishes without
-        # the 13:00 runner, which is the only other place covers are made.
-        cover_status = _ship_cover_art(client, slug, article_title)
+        ready, cover_reason = browser_asset_ready(slug_out)
+        if ready:
+            # This branch is a publish step only after the worker's receipt gate
+            # has verified provider, QA, dimensions, byte caps, and hashes.
+            client.update_article(
+                article_id,
+                {
+                    "status": "published",
+                    "publishedAt": _now_iso(),
+                    "topicDecision": decision.decision.value,
+                },
+                status="published",
+            )
+            topic_status = "published"
+            published = True
+            cover_status = "browser-receipt"
+            record_publish(
+                {"ts": _now_iso(), "event": "published", "slug": slug, "lane": "draft"},
+                PUBLISH_LEDGER,
+            )
+        else:
+            # Keep the article reviewable and let the 13:00 publish lane retry
+            # after the supervised worker releases a new browser-generated pair.
+            cover_status = f"browser-blocked: {cover_reason}"
+            client.update_article(
+                article_id,
+                {"status": "in_review", "topicDecision": decision.decision.value},
+                status="draft",
+            )
+            _append_state(
+                {
+                    "ts": _now_iso(),
+                    "event": "auto_publish_blocked",
+                    "slug": slug,
+                    "reason": cover_reason,
+                }
+            )
     elif decision.decision == Decision.REJECT:
         topic_status = "failed"
         # Article was just created as a draft and is never published here, so
@@ -1483,6 +1506,22 @@ def main(argv: list[str] | None = None) -> int:
                     return 2
                 key_file = argv[i + 1]
             return run_gemini_smoke(config=cfg, key_file=key_file)
+
+        # read-only sitemap-vs-published integrity invariant (QA F-01, 2026-10-08).
+        # Never writes Strapi; exit 0 pass, 1 invariant failed (sitemap-only
+        # slug and/or emitted article URL not HTTP 200), 2 dependency unavailable.
+        if cmd == "sitemap-check":
+            sitemap_url = DEFAULT_SITEMAP_URL
+            if "--url" in argv:
+                i = argv.index("--url")
+                if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
+                    print(
+                        "usage: python -m engine.cli sitemap-check [--url <sitemap-url>]",
+                        file=sys.stderr,
+                    )
+                    return 2
+                sitemap_url = argv[i + 1]
+            return run_sitemap_check(config=cfg, client=client, sitemap_url=sitemap_url)
 
         print(f"unknown command: {cmd}", file=sys.stderr)
         return 2
