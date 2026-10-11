@@ -632,3 +632,53 @@ ISR class as `/feed.xml` in the build output.
 If a stale-sitemap finding ever recurs: check the latest Vercel deployment first, and
 confirm `/sitemap.xml` is still served by the route handler (not a metadata route) —
 plus ATHENA's sitemap-vs-published invariant (t_84a1fa68).
+
+## 2026-10-11 — Internal-link invariant repair + publish-lane backstop (t_49aba8a9) — HEPHAESTUS
+
+The `nomadomics-content-invariants` cron (79ab8f76111e) failed with corpus link
+coverage 48/49: `how-to-live-in-thailand-as-a-digital-nomad` carried 0 countable
+internal links, and 3 articles read as zero-inbound orphans.
+
+ROOT CAUSE (three layers, all verified):
+1. DATA: the 13:00 polish pass emitted all three of Thailand's links as
+   `[slug](slug)` — bare-slug hrefs, no leading slash. Browsers resolve them
+   under the article path (broken links); the monitor counts zero.
+2. PUBLISH LANE: the draft lane has run `ensure_internal_links` since 2026-10-04,
+   but `engine/publish.py` never did — the polish LLM was the only link source,
+   and `article_invariant_errors` (incl. link hygiene) ran only on the PRE-polish
+   body at candidate selection, never on the final body actually published.
+3. PROMPT: `POLISH_SYSTEM` said "use the anchor text shown" over a list rendered
+   as `[slug](/slug)` — teaching raw-slug anchors.
+(The cron's "Thailand live HTTP 500" was the transient inside that morning's
+deploy window — both hosts 200 on every later probe. UNVERIFIED→TRANSIENT/RESOLVED.)
+
+REPAIR (applier: ~/.hermes/state/nomadomics/repair_internal_links_t49aba8a9.py,
+dry-run first, per-edit count assertion, backup
+bodies-pre-linkfix-20261011T165336Z.json):
+- Thailand: 3 bare-slug links repaired in place, two anchors naturalized, +1
+  contextual link to cost-of-living-ho-chi-minh-city-nomads. Targets 0 → 4.
+- how-to-legally-pay-less-tax-as-a-digital-nomad: existing "Tbilisi, Georgia"
+  prose wrapped as a link to the Tbilisi article (kills that orphan). 3 → 4.
+- cost-of-living-tbilisi (other orphan) now has inbound=1; HCMC inbound=1.
+- Every PUT went through the canonical maintenance path with the publishedAt
+  re-stamp read + SQL-restored (tax article) or scoped-transaction-restored to
+  the publish-log time 2026-10-11 13:00:29.976 local (Thailand — the repair
+  script's own helper crashed on this document's FOUR version rows; the two
+  in_review rows were left published_at=NULL per repair_dates doctrine).
+- Live read-back: all repaired /slug hrefs serving on www.nomadomics.blog AND
+  nomadomics-v2.vercel.app (200). NOTE: first post-PUT probe served the stale
+  ISR snapshot (revalidate=300s) — re-probe before believing a failure.
+
+MONITOR AFTER: 51/51 published articles >= 2 internal links (100.0% coverage),
+0 under-threshold, 0 zero-inbound orphans (state nomadomics_trial.json,
+run 2026-10-11T16:59:06+00:00).
+
+PREVENTION (commit 80e23af, engine tests 476 passed / 2 skipped):
+- publish.py runs `ensure_internal_links` on the FINAL body (idempotent) and
+  REFUSES the publish when `link_hygiene_issues` flags it (journal event
+  `publish_refused_link_hygiene`) — checked before the Strapi write, not after.
+- POLISH_SYSTEM now requires natural-prose anchors and the exact leading-slash
+  href, and says a bare slug fails the publish gate.
+- KNOWN DEBT (needs Guy's review window, NOT done here): the whole-table
+  publishedAt backfill — nomadomics_repair_dates.py dry run reports 44 documents
+  of September-era re-stamp drift. Bulk mutation of the content DB = Guy sign-off.
