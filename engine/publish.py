@@ -37,7 +37,7 @@ from llm import (
     stage_chain,
 )
 from strapi import StrapiClient, StrapiError
-from invariants import article_invariant_errors
+from invariants import article_invariant_errors, ensure_internal_links, link_hygiene_issues
 from publish_ledger import LEDGER as SHARED_LEDGER
 from publish_ledger import published_slugs as ledger_slugs
 from publish_ledger import record as record_publish
@@ -136,7 +136,11 @@ restructure.
    section: 3-4 punchy bullets of the most actionable takeaways. Lead each
    bullet with a bold label (e.g. **Book refundables first:** …).
 2. Add 2-3 contextual internal links to the related articles provided. Embed
-   them naturally in the body prose — never as a list. Use the anchor text shown.
+   them naturally in the body prose — never as a list. The anchor text MUST be
+   natural prose that fits the sentence (never a raw slug). The href MUST be
+   the shown path EXACTLY, including the leading slash, e.g.
+   [related guide](/exact-slug-from-the-list) — a bare slug without the slash
+   is a broken link and fails the publish gate.
    Prefer linking from the most relevant section.
 3. Refine metaTitle (≤60 chars) and metaDescription (≤160 chars) — make them
    punchy, include the primary keyword, end metaDescription with a hook.
@@ -1058,6 +1062,33 @@ def publish_one(
             result["polish"] = "failed (kept original)"
 
     new_md = polished["markdown"] if polished else original_md
+    # Internal-link backstop on the FINAL body (2026-10-11, t_49aba8a9). The
+    # draft lane has had this since 2026-10-04 (pipeline_cli), but the 13:00
+    # publisher did not — the polish pass was the only link source, and on
+    # 2026-10-11 it emitted bare-slug hrefs (`[slug](slug)`, no leading slash)
+    # that render as broken links and count as zero. Deterministic, idempotent,
+    # never self-links, degrades to a no-op when the corpus is unavailable.
+    _corpus_fn = getattr(client, "list_published_titles", None)
+    if _corpus_fn is not None:
+        new_md = ensure_internal_links(new_md, _corpus_fn(), own_slug=slug)
+    # Refuse to ship malformed links. `article_invariant_errors` above runs on
+    # the PRE-polish stored body; the polish model writes the body actually
+    # published, so link hygiene must hold on `new_md` too. Live proof
+    # 2026-10-11: `how-to-live-in-thailand-as-a-digital-nomad` published with
+    # three slug-anchor links (anchor text = raw slug, href missing the slash).
+    hygiene = link_hygiene_issues(new_md)
+    if hygiene:
+        _append_state({
+            "ts": _now_iso(),
+            "event": "publish_refused_link_hygiene",
+            "slug": slug,
+            "errors": hygiene,
+        })
+        return {
+            "event": "skip",
+            "slug": slug,
+            "reason": f"post-polish link hygiene failed: {'; '.join(hygiene[:3])}",
+        }
     new_meta_title = (polished.get("metaTitle") if polished else winner.get("metaTitle")) or ""
     new_meta_desc = (polished.get("metaDescription") if polished else winner.get("metaDescription")) or ""
     # Enforce Strapi schema length caps (LLM can overshoot). Trim at a word
