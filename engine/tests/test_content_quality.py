@@ -56,32 +56,43 @@ def test_topic_specific_opening_is_allowed():
     ) == []
 
 
-def test_sources_section_requires_two_real_visible_links():
+def test_inline_hyperlinks_satisfy_citation_contract_without_sources_section():
+    """Guy's rule (2026-10-11): blogs need inline links, not a works-cited footer."""
     body = (
         "# Guide\n\nSee [A](https://irs.gov/a) and [B](https://travel.state.gov/b).\n"
     )
-    assert source_section_issues(body) == ["missing visible Sources section"]
+    assert source_section_issues(body) == []
+
+
+def test_zero_link_body_still_fails_citation_contract():
+    body = "# Guide\n\nThe fee is $10 and nothing is linked.\n"
+    assert source_section_issues(body) == [
+        "fewer than 2 real inline citations (body hyperlinks or Sources entries)"
+    ]
+
+
+def test_sources_section_still_counts_toward_coverage():
     assert source_section_issues(clean_sources()) == []
 
 
-def test_backstop_adds_visible_sources_even_when_inline_citations_exist():
+def test_backstop_adds_missing_citation_when_body_has_fewer_than_two():
     body = (
         "# Guide\n\nSee [A](https://irs.gov/a) and [B](https://travel.state.gov/b).\n"
     )
     out = ensure_body_citations(body, FACTS)
-    assert "## Sources" in out
-    assert out.count("https://irs.gov/a") == 2
-    assert out.count("https://travel.state.gov/b") == 2
+    # Two real inline links already satisfy the contract — untouched.
+    assert out == body
     assert link_hygiene_issues(out) == []
-    assert ensure_body_citations(out, FACTS) == out
 
 
-def test_shared_article_gate_wires_opening_sources_and_link_hygiene():
+def test_shared_article_gate_wires_opening_citations_and_link_hygiene():
     errors = article_invariant_errors(article(clean_sources()))
     assert errors == []
 
     generic = clean_sources().replace("The fee is $10", "Picture this: the fee is $10")
     assert "generic opening template is not allowed" in article_invariant_errors(article(generic))
 
-    missing_sources = clean_sources().replace("## Sources", "## Related reading")
-    assert "missing visible Sources section" in article_invariant_errors(article(missing_sources))
+    # Guy's rule: renaming/removing the Sources heading is fine — the contract
+    # is real citations, wherever they live. A zero-link body is what fails.
+    zero_link = clean_sources().replace("- [IRS A](https://irs.gov/a)\n- [State B](https://travel.state.gov/b)\n", "")
+    assert "fewer than 2 real inline citations (body hyperlinks or Sources entries)" in article_invariant_errors(article(zero_link))

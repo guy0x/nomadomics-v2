@@ -86,21 +86,17 @@ def test_without_the_backstop_the_same_body_fails_the_publish_gate():
 
     assert errors == [
         "fewer than 2 real citations",
-        "missing visible Sources section",
+        "fewer than 2 real inline citations (body hyperlinks or Sources entries)",
     ]
 
 
-def test_a_body_that_already_cites_two_real_sources_gains_a_visible_section():
+def test_a_body_with_two_inline_links_is_left_untouched():
+    """Guy's rule: two real inline hyperlinks already satisfy the contract."""
     body = (
         CITATION_LESS_BODY
         + "\nSee [IRS](https://www.irs.gov/a) and [State](https://www.irs.gov/b).\n"
     )
-    out = ensure_body_citations(body, REAL_FACTS)
-
-    assert out != body
-    assert out.count("## Sources") == 1
-    assert "https://www.irs.gov/feie" in out
-    assert "https://travel.state.gov/visas.html" in out
+    assert ensure_body_citations(body, REAL_FACTS) == body
 
 
 def test_placeholder_and_non_https_facts_are_never_cited():
@@ -118,11 +114,12 @@ def test_placeholder_and_non_https_facts_are_never_cited():
 
 
 def test_only_the_missing_real_facts_are_appended():
-    body = CITATION_LESS_BODY + "\nhttps://www.irs.gov/feie\n"
+    body = CITATION_LESS_BODY + "\nSee [IRS](https://www.irs.gov/feie).\n"
 
     out = ensure_body_citations(body, REAL_FACTS)
 
-    assert out.count("https://www.irs.gov/feie") == 2
+    # The already-cited fact is not duplicated; the genuinely missing one is added.
+    assert out.count("https://www.irs.gov/feie") == 1
     assert "https://travel.state.gov/visas.html" in out
 
 

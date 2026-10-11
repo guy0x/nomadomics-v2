@@ -161,13 +161,18 @@ def source_section_urls(body: str) -> list[str]:
 
 
 def source_section_issues(body: str, fetch=None) -> list[str]:
-    """Named failures for the reader-visible source list contract."""
+    """Named failures for the citation contract (2026-10-11: Guy's rule).
+
+    Blog articles need hyperlinks, not a works-cited footer: the contract is
+    >=2 real inline hyperlinks woven into the body. A trailing ``## Sources``
+    section is OPTIONAL — when present it still counts toward coverage, but its
+    absence alone is no longer a failure.
+    """
     fetch = fetch or citation_fetch
-    if not _SOURCES_HEADING_RE.search(body or ""):
-        return ["missing visible Sources section"]
-    real = [u for u in source_section_urls(body) if citation_is_real(u, fetch)]
-    if len(real) < 2:
-        return ["fewer than 2 visible source citations"]
+    inline = [u for u in body_markdown_link_urls(body) if citation_is_real(u, fetch)]
+    section = [u for u in source_section_urls(body) if citation_is_real(u, fetch)]
+    if len(inline) + len(section) < 2:
+        return ["fewer than 2 real inline citations (body hyperlinks or Sources entries)"]
     return []
 
 
@@ -209,6 +214,20 @@ def article_invariant_errors(article: dict, fetch=None) -> list[str]:
 def body_citation_urls(body: str) -> list[str]:
     """https URLs in an article body, in order of appearance, deduped."""
     return list(dict.fromkeys(re.findall(r"https://[^\s)>\]\"]+", body or "")))
+
+
+def body_markdown_link_urls(body: str) -> list[str]:
+    """URLs appearing as proper ``[anchor](url)`` markdown links in the body.
+
+    Excludes the ``## Sources`` section (those are counted separately) and
+    dedupes, preserving order. Bare/paren URLs are deliberately excluded —
+    link hygiene flags those shapes already.
+    """
+    body = body or ""
+    heading = _SOURCES_HEADING_RE.search(body)
+    prose = body[:heading.start()] if heading else body
+    urls = re.findall(r"\[[^\]]+\]\((https?://[^)\s]+)\)", prose)
+    return list(dict.fromkeys(urls))
 
 
 # ---- Link hygiene (QA: Guy 2026-10-05) ------------------------------
@@ -293,14 +312,14 @@ def _insert_source_lines(body: str, lines: list[str]) -> str:
 
 
 def ensure_body_citations(body: str, facts, fetch=None) -> str:
-    """Guarantee two real citations and a visible ``## Sources`` section.
+    """Guarantee two real citations per the citation contract (Guy's rule).
 
-    Inline citations remain useful for prose, but the audit showed that inline
-    links alone do not give readers a reliable source surface. This backstop
-    therefore adds the smallest missing set of real research sources to a
-    visible section even when the body already has two inline links. Generated
-    bullets are always markdown links so the link-hygiene gate cannot reject its
-    own repair. The function is idempotent and never fabricates a source.
+    Since 2026-10-11 the contract is >=2 real inline hyperlinks in the body;
+    a trailing ``## Sources`` section is optional. This backstop therefore only
+    acts when the body lacks two real inline (or section) links, appending the
+    smallest missing set of real research sources. Generated bullets are always
+    markdown links so the link-hygiene gate cannot reject its own repair. The
+    function is idempotent and never fabricates a source.
     """
     fetch = fetch or citation_fetch
     real: list[tuple[str, str]] = []
@@ -313,13 +332,15 @@ def ensure_body_citations(body: str, facts, fetch=None) -> str:
 
     body = body or ""
     cited = [u for u in body_citation_urls(body) if citation_is_real(u, fetch)]
-    visible = [u for u in source_section_urls(body) if citation_is_real(u, fetch)]
-    if len(cited) >= 2 and len(visible) >= 2:
+    if len(cited) >= 2:
         return body
-
+    visible = [u for u in source_section_urls(body) if citation_is_real(u, fetch)]
     visible_set = set(visible)
-    needed = max(0, 2 - len(visible))
-    additions = [item for item in real if item[0] not in visible_set][:needed]
+    cited_set = set(cited)
+    needed = max(0, 2 - len(cited))
+    fresh = [item for item in real
+             if item[0] not in visible_set and item[0] not in cited_set]
+    additions = (fresh or [item for item in real if item[0] not in visible_set])[:needed]
     if not additions:
         return body
     return _insert_source_lines(body, [_source_line(url, title) for url, title in additions])
