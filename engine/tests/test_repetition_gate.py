@@ -38,7 +38,9 @@ import publish  # noqa: E402
 def body_with_opener(opener: str) -> str:
     return (
         f"# A guide\n\n{opener}\n\n"
-        "The fee is $10 and the threshold is $20.\n\n"
+        "The fee is $10 and the threshold is $20. See [eSIM plans]"
+        "(/best-esim-plans-for-digital-nomads) and the [tax primer]"
+        "(/digital-nomad-taxes).\n\n"
         "## Sources\n\n"
         "- [IRS A](https://irs.gov/a)\n"
         "- [State B](https://travel.state.gov/b)\n"
@@ -50,6 +52,13 @@ CORPUS = [
     {"slug": "a", "bodyMarkdown": body_with_opener(CORPUS_OPENER + " one.")},
     {"slug": "b", "bodyMarkdown": body_with_opener(CORPUS_OPENER + " two.")},
     {"slug": "c", "bodyMarkdown": body_with_opener(CORPUS_OPENER + " three.")},
+    # The internal-link floor (t_8518b65e) resolves candidate link targets
+    # against the published corpus, so the corpus must contain the two
+    # real slugs the shared fixture body links to.
+    {"slug": "best-esim-plans-for-digital-nomads",
+     "bodyMarkdown": body_with_opener("A $20 fee stings.")},
+    {"slug": "digital-nomad-taxes",
+     "bodyMarkdown": body_with_opener("Visa runs cost money.")},
 ]
 
 

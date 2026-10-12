@@ -49,7 +49,13 @@ from config import Config, load_config, redact
 from editor.editor import edit_draft
 from llm import STAGE_BUDGET_SECONDS
 from research.research import research_topic, validate_research
-from invariants import article_invariant_errors, check_write_invariants, ensure_body_citations, ensure_internal_links
+from invariants import (
+    article_invariant_errors,
+    check_write_invariants,
+    ensure_body_citations,
+    ensure_internal_links,
+    internal_link_issues,
+)
 from freshness import freshness_report
 from publish_ledger import LEDGER as PUBLISH_LEDGER
 from publish_ledger import record as record_publish
@@ -880,9 +886,11 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     # client predating list_published_titles must not fail an otherwise
     # publishable article.
     _corpus_fn = getattr(client, "list_published_titles", None)
+    # Capture the corpus ONCE: the same rows feed the internal-link backstop
+    # here and the resolution-aware floor at auto-publish time below.
+    corpus_rows = _corpus_fn() if _corpus_fn is not None else []
     if _corpus_fn is not None:
-        body_markdown = ensure_internal_links(
-            body_markdown, _corpus_fn(), own_slug=slug_out)
+        body_markdown = ensure_internal_links(body_markdown, corpus_rows, own_slug=slug_out)
     write_errors = article_invariant_errors(
         {
             "excerpt": seo.excerpt,
@@ -948,30 +956,22 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     topic_status = "in_review"
     cover_status = "skipped"
     if decision.decision == Decision.AUTO_PUBLISH:
-        ready, cover_reason = browser_asset_ready(slug_out)
-        if ready:
-            # This branch is a publish step only after the worker's receipt gate
-            # has verified provider, QA, dimensions, byte caps, and hashes.
-            client.update_article(
-                article_id,
-                {
-                    "status": "published",
-                    "publishedAt": _now_iso(),
-                    "topicDecision": decision.decision.value,
-                },
-                status="published",
-            )
-            topic_status = "published"
-            published = True
-            cover_status = "browser-receipt"
-            record_publish(
-                {"ts": _now_iso(), "event": "published", "slug": slug, "lane": "draft"},
-                PUBLISH_LEDGER,
-            )
-        else:
-            # Keep the article reviewable and let the 13:00 publish lane retry
-            # after the supervised worker releases a new browser-generated pair.
-            cover_status = f"browser-blocked: {cover_reason}"
+        # Fail closed (t_8518b65e): the internal-link floor must hold on the
+        # body about to auto-publish. The write gate above
+        # (article_invariant_errors without a corpus) does not enforce the
+        # floor, and the ensure_internal_links backstop can miss it only when
+        # the corpus was unavailable at write time — a below-threshold body
+        # must never auto-publish. In review it goes, for the 13:00 publish
+        # lane (which enforces the same floor) to retry with a fresh corpus.
+        # Resolution-aware when the corpus is in reach (fleet-monitor parity):
+        # only links to published articles count, never self-links.
+        floor_issues: list[str] = []
+        if _corpus_fn is not None:
+            pub_slugs = {str(r.get("slug")) for r in corpus_rows if r.get("slug")}
+            floor_issues = internal_link_issues(
+                body_markdown, published_slugs=pub_slugs or None, own_slug=slug_out)
+        if floor_issues:
+            cover_status = f"internal-link blocked (fail closed): {floor_issues[0]}"
             client.update_article(
                 article_id,
                 {"status": "in_review", "topicDecision": decision.decision.value},
@@ -980,11 +980,49 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
             _append_state(
                 {
                     "ts": _now_iso(),
-                    "event": "auto_publish_blocked",
+                    "event": "autopublish_refused_internal_links",
                     "slug": slug,
-                    "reason": cover_reason,
+                    "errors": floor_issues,
                 }
             )
+        else:
+            ready, cover_reason = browser_asset_ready(slug_out)
+            if ready:
+                # This branch is a publish step only after the worker's receipt gate
+                # has verified provider, QA, dimensions, byte caps, and hashes.
+                client.update_article(
+                    article_id,
+                    {
+                        "status": "published",
+                        "publishedAt": _now_iso(),
+                        "topicDecision": decision.decision.value,
+                    },
+                    status="published",
+                )
+                topic_status = "published"
+                published = True
+                cover_status = "browser-receipt"
+                record_publish(
+                    {"ts": _now_iso(), "event": "published", "slug": slug, "lane": "draft"},
+                    PUBLISH_LEDGER,
+                )
+            else:
+                # Keep the article reviewable and let the 13:00 publish lane retry
+                # after the supervised worker releases a new browser-generated pair.
+                cover_status = f"browser-blocked: {cover_reason}"
+                client.update_article(
+                    article_id,
+                    {"status": "in_review", "topicDecision": decision.decision.value},
+                    status="draft",
+                )
+                _append_state(
+                    {
+                        "ts": _now_iso(),
+                        "event": "auto_publish_blocked",
+                        "slug": slug,
+                        "reason": cover_reason,
+                    }
+                )
     elif decision.decision == Decision.REJECT:
         topic_status = "failed"
         # Article was just created as a draft and is never published here, so

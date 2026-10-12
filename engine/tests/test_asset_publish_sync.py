@@ -195,7 +195,9 @@ def _ready_article():
         "confidence": 90,
         "status": "in_review",
         "bodyMarkdown": (
-            "# Cost of Living in Chiang Mai\n\nBody content here.\n\n"
+            "# Cost of Living in Chiang Mai\n\nBody content here. See "
+            "[the eSIM guide](/best-esim-plans-for-digital-nomads) and "
+            "[travel insurance notes](/travel-insurance-for-digital-nomads).\n\n"
             "## Sources\n\n"
             "- [Numbeo cost of living](https://www.numbeo.com/cost-of-living)\n"
             "- [Expatistan cost of living](https://www.expatistan.com/cost-of-living)\n"

@@ -141,9 +141,11 @@ def test_publish_one_publishes_a_draft_layer_candidate(monkeypatch, tmp_path):
             ),
             "bodyMarkdown": (
                 f"# ZZ Publish Acceptance {stamp}\n\n"
-                "Fixture body with two verifiable citations.\n\n"
-                "https://www.irs.gov/individuals/international-taxpayers\n"
-                "https://travel.state.gov/content/travel.html\n"
+                "Fixture body with two verifiable citations: [IRS international "
+                "taxpayers](https://www.irs.gov/individuals/international-taxpayers) "
+                "and [State travel](https://travel.state.gov/content/travel.html). "
+                "See also [eSIM plans](/best-esim-plans-for-digital-nomads) and "
+                "the [tax primer](/digital-nomad-taxes).\n"
             ),
         })
         doc_id = created["data"]["documentId"]

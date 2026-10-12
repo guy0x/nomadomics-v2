@@ -58,7 +58,9 @@ def make_article(
         "confidence": confidence,
         "status": status,
         "bodyMarkdown": (
-            "# Title\n\nBody content here.\n\n## Section\nSome text.\n\n"
+            "# Title\n\nBody content here. Read [related guidance]"
+            "(/best-esim-plans-for-digital-nomads) and the [tax primer]"
+            "(/digital-nomad-taxes).\n\n## Section\nSome text.\n\n"
             "## Sources\n\n"
             "- [IRS one](https://irs.gov/one)\n"
             "- [IRS two](https://irs.gov/two)\n"

@@ -32,7 +32,12 @@ from llm import (
     stage_chain,
 )
 from strapi import StrapiClient, StrapiError
-from invariants import article_invariant_errors, ensure_internal_links, link_hygiene_issues
+from invariants import (
+    article_invariant_errors,
+    ensure_internal_links,
+    internal_link_issues,
+    link_hygiene_issues,
+)
 from publish_ledger import LEDGER as SHARED_LEDGER
 from publish_ledger import published_slugs as ledger_slugs
 from publish_ledger import record as record_publish
@@ -1200,17 +1205,36 @@ def publish_one(
     # state file. An empty corpus degrades to an inert gate, like the
     # internal-link backstop. The getattr guard mirrors pipeline_cli: test
     # doubles and any client predating list_published_titles must not fail.
+    #
+    # Fail closed (t_8518b65e): the corpus also feeds the repetition gate and
+    # the internal-link floor during candidate selection. If the read ERRORS,
+    # no candidate can be cleanly evaluated — a gate that errored must not be
+    # waved through, so the run is journaled and nothing is published this
+    # pass. The lane retries on the next run.
     published_corpus: list[dict] = []
     if getattr(client, "list_published_titles", None) is not None:
-        published_corpus = client._request(
-            "GET",
-            "/api/articles",
-            params={
-                "filters[status][$eq]": "published",
-                "sort": "publishedAt:desc",
-                "pagination[pageSize]": "200",
-            },
-        ).get("data", [])
+        try:
+            published_corpus = client._request(
+                "GET",
+                "/api/articles",
+                params={
+                    "filters[status][$eq]": "published",
+                    "sort": "publishedAt:desc",
+                    "pagination[pageSize]": "200",
+                },
+            ).get("data", [])
+        except Exception as e:  # noqa: BLE001 — network read feeds every gate
+            _append_state({
+                "ts": _now_iso(),
+                "event": "publish_gate_error",
+                "gate": "published_corpus_fetch",
+                "error": f"{type(e).__name__}: {e}",
+            })
+            return {
+                "event": "skip",
+                "reason": "published-corpus fetch failed — content-quality gates "
+                          "cannot be evaluated (fail closed)",
+            }
 
     cover_mode = (os.environ.get("NOMADOMICS_COVER_MODE") or "gemini-browser").strip().lower()
     browser_only = cover_mode in {"gemini-browser", "browser", "nano-banana"}
@@ -1231,8 +1255,21 @@ def publish_one(
             continue
         # Ratified E: confidence is not enough. Excerpt, meta, a yearless slug,
         # and two real citations have to hold or this article stays in review.
-        # With the corpus fetched above, the repetition gate runs too.
-        if article_invariant_errors(a, published_corpus=published_corpus):
+        # With the corpus fetched above, the repetition + internal-link gates
+        # run too. Fail closed (t_8518b65e): if a gate ERRORS, the article is
+        # journaled and blocked — an error is never waved through as a pass.
+        try:
+            errors = article_invariant_errors(a, published_corpus=published_corpus)
+        except Exception as e:  # noqa: BLE001 — gate error blocks the article
+            _append_state({
+                "ts": _now_iso(),
+                "event": "publish_gate_error",
+                "gate": "article_invariants",
+                "slug": slug,
+                "error": f"{type(e).__name__}: {e}",
+            })
+            continue
+        if errors:
             continue
         if browser_only:
             ready, reason = browser_asset_ready(str(slug))
@@ -1260,7 +1297,10 @@ def publish_one(
                 continue
             if int(a.get("confidence") or 0) < MIN_CONFIDENCE:
                 continue
-            errors = article_invariant_errors(a, published_corpus=published_corpus)
+            try:
+                errors = article_invariant_errors(a, published_corpus=published_corpus)
+            except Exception as e:  # noqa: BLE001 — diagnostics must not crash
+                errors = [f"invariant gate error ({type(e).__name__})"]
             if errors:
                 invariant_blocked.append(f"{a.get('slug')} ({'; '.join(errors)})")
         blocked_suffix = (
@@ -1319,32 +1359,74 @@ def publish_one(
             result["polish"] = "failed (kept original)"
 
     new_md = polished["markdown"] if polished else original_md
-    # Internal-link backstop on the FINAL body (2026-10-11, t_49aba8a9). The
-    # draft lane has had this since 2026-10-04 (pipeline_cli), but the 13:00
-    # publisher did not — the polish pass was the only link source, and on
-    # 2026-10-11 it emitted bare-slug hrefs (`[slug](slug)`, no leading slash)
-    # that render as broken links and count as zero. Deterministic, idempotent,
-    # never self-links, degrades to a no-op when the corpus is unavailable.
-    _corpus_fn = getattr(client, "list_published_titles", None)
-    if _corpus_fn is not None:
-        new_md = ensure_internal_links(new_md, _corpus_fn(), own_slug=slug)
-    # Refuse to ship malformed links. `article_invariant_errors` above runs on
-    # the PRE-polish stored body; the polish model writes the body actually
-    # published, so link hygiene must hold on `new_md` too. Live proof
-    # 2026-10-11: `how-to-live-in-thailand-as-a-digital-nomad` published with
-    # three slug-anchor links (anchor text = raw slug, href missing the slash).
-    hygiene = link_hygiene_issues(new_md)
-    if hygiene:
+    # Final content-quality gate chain (t_8518b65e): every check below runs on
+    # the body ACTUALLY published. Fail closed — if any gate ERRORS, the
+    # article is journaled and blocked, never published; an error is never
+    # waved through as a pass.
+    try:
+        # Internal-link backstop on the FINAL body (2026-10-11, t_49aba8a9).
+        # The draft lane has had this since 2026-10-04 (pipeline_cli), but the
+        # 13:00 publisher did not — the polish pass was the only link source,
+        # and on 2026-10-11 it emitted bare-slug hrefs (`[slug](slug)`, no
+        # leading slash) that render as broken links and count as zero.
+        # Deterministic, idempotent, never self-links, degrades to a no-op
+        # when the corpus is unavailable.
+        _corpus_fn = getattr(client, "list_published_titles", None)
+        if _corpus_fn is not None:
+            new_md = ensure_internal_links(new_md, _corpus_fn(), own_slug=slug)
+        # Refuse to ship malformed links. `article_invariant_errors` above runs
+        # on the PRE-polish stored body; the polish model writes the body
+        # actually published, so link hygiene must hold on `new_md` too. Live
+        # proof 2026-10-11: `how-to-live-in-thailand-as-a-digital-nomad`
+        # published with three slug-anchor links (anchor text = raw slug, href
+        # missing the slash).
+        hygiene = link_hygiene_issues(new_md)
+        if hygiene:
+            _append_state({
+                "ts": _now_iso(),
+                "event": "publish_refused_link_hygiene",
+                "slug": slug,
+                "errors": hygiene,
+            })
+            return {
+                "event": "skip",
+                "slug": slug,
+                "reason": f"post-polish link hygiene failed: {'; '.join(hygiene[:3])}",
+            }
+        # Internal-link floor on the FINAL body (t_8518b65e). Candidate
+        # selection checked the stored body; the polished body is what ships,
+        # so the floor must hold here too. The backstop above can still miss it
+        # when the corpus is empty or every other slug is this article's own —
+        # a below-threshold article never ships. Resolution-aware like the
+        # fleet monitor: the published_corpus fetched for selection is still in
+        # scope, so only links to published articles count, never self-links.
+        pub_slugs = {str(r.get("slug")) for r in published_corpus if r.get("slug")}
+        internal_gate = internal_link_issues(
+            new_md, published_slugs=pub_slugs or None, own_slug=slug)
+        if internal_gate:
+            _append_state({
+                "ts": _now_iso(),
+                "event": "publish_refused_internal_links",
+                "slug": slug,
+                "errors": internal_gate,
+            })
+            return {
+                "event": "skip",
+                "slug": slug,
+                "reason": f"internal-link floor blocked publish: {internal_gate[0]}",
+            }
+    except Exception as e:  # noqa: BLE001 — a gate error blocks, never ships
         _append_state({
             "ts": _now_iso(),
-            "event": "publish_refused_link_hygiene",
+            "event": "publish_gate_error",
+            "gate": "final-body",
             "slug": slug,
-            "errors": hygiene,
+            "error": f"{type(e).__name__}: {e}",
         })
         return {
             "event": "skip",
             "slug": slug,
-            "reason": f"post-polish link hygiene failed: {'; '.join(hygiene[:3])}",
+            "reason": "final content-quality gate error (fail closed)",
         }
     new_meta_title = (polished.get("metaTitle") if polished else winner.get("metaTitle")) or ""
     new_meta_desc = (polished.get("metaDescription") if polished else winner.get("metaDescription")) or ""

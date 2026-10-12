@@ -3,7 +3,9 @@
 An article is publishable only when the excerpt and meta are non-empty, the
 slug has no year, at least two citations are real and visible in a ``## Sources``
 section, the opening is not one of the retired generic templates, and all links
-pass link hygiene. Meta fields are shaped copy rather than generator artifacts —
+pass link hygiene. The publish lane additionally enforces an internal-link
+floor (>= 2 distinct internal targets, t_8518b65e). Meta fields are shaped
+copy rather than generator artifacts —
 the metaDescription is distinct from the excerpt, carries no migration template
 tail, ends in terminal punctuation and fits 120-160c; neither meta field ends
 in a literal '...'; the metaTitle fits the 60c SERP budget. A citation is real
@@ -314,6 +316,18 @@ def article_invariant_errors(
     if published_corpus is not None:
         errors.extend(corpus_repetition_issues(
             body, published_corpus, own_slug=str(article.get("slug") or "")))
+        # Internal-link floor (t_8518b65e): the publish lane MUST NOT ship a
+        # body with fewer than MIN_INTERNAL_LINKS internal links. The gate is
+        # corpus-gated like the repetition gate above so the draft lane's
+        # write check (no corpus in reach) keeps accepting drafts and the
+        # ensure_internal_links backstop stays its only link source; the
+        # publish step enforces the floor. With the corpus in hand the count
+        # resolves like the fleet monitor: only links to published articles
+        # count, never the article's own slug.
+        published_slugs = {str(r.get("slug")) for r in published_corpus if r.get("slug")}
+        errors.extend(internal_link_issues(
+            body, published_slugs=published_slugs or None,
+            own_slug=str(article.get("slug") or "")))
     return errors
 
 
@@ -494,6 +508,50 @@ _TITLE_STOPWORDS = {
     "how", "in", "is", "it", "of", "on", "or", "that", "the", "this", "to",
     "what", "when", "where", "which", "who", "why", "with", "your",
 }
+
+
+def internal_link_issues(body: str, min_links: int = MIN_INTERNAL_LINKS,
+                         published_slugs: set[str] | None = None,
+                         own_slug: str = "") -> list[str]:
+    """Named failure when the body carries fewer than `min_links` internal links.
+
+    Counts DISTINCT internal targets — relative ``/slug`` and absolute
+    ``https://nomadomics.(com|blog)/slug`` — with the same detector the
+    backstop uses (``body_internal_link_targets``), so the gate and the fixer
+    can never disagree about what counts (that disagreement already cost one
+    article a false 8-vs-9 scan, 2026-10-04).
+
+    Publish-lane enforcement (t_8518b65e): the draft lane may still WRITE a
+    below-threshold body (its ``ensure_internal_links`` backstop tops it up),
+    but the publish step must never ship one — a below-floor article is
+    blocked, exactly like a below-floor citation count.
+
+    Resolution contract (fleet monitor parity, t_8518b65e): when
+    ``published_slugs`` is supplied (the publish lane always has the corpus),
+    only targets that resolve to a PUBLISHED article count, and the article's
+    own slug never counts. This is how the fleet monitor measures coverage —
+    a link to a slug that is not (yet) published is a dangling 404 and counts
+    zero, exactly like the bare-slug href if broken. ``internal-link coverage
+    is 48/49`` survived because the shape-only count said 2 while the monitor
+    correctly counted 1 (live 2026-10-12:
+    ``international-health-insurance-claims-abroad`` linked a non-published
+    slug). An empty/absent slug set degrades to shape-counting: with nothing
+    to resolve against, only the link shape can be judged.
+    """
+    targets = body_internal_link_targets(body or "")
+    if published_slugs:
+        targets = [
+            t.lstrip("/") for t in targets
+            if t.lstrip("/") in published_slugs and t.lstrip("/") != own_slug
+        ]
+    have = len(targets)
+    if have >= min_links:
+        return []
+    if published_slugs:
+        noun = "internal links to published articles"
+    else:
+        noun = "internal links"
+    return [f"fewer than {min_links} {noun} (have {have})"]
 
 
 def _mention_phrases(title: str) -> list[str]:
