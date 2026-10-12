@@ -250,6 +250,18 @@ def edit_draft(
                         ) from e
                     edited = _extract_edit(content, draft)
                     if edited.has_content:
+                        # Integrate deterministic slop findings into the report
+                        from editor.slop_rules import check_text
+                        slop_findings = check_text(edited.markdown)
+                        if slop_findings:
+                            slop_report = "; ".join(
+                                f"{f['rule_id']}: {f['message']}" for f in slop_findings
+                            )
+                            edited.edit_report = (
+                                (edited.edit_report + " | Slop: " + slop_report)
+                                if edited.edit_report
+                                else ("Slop: " + slop_report)
+                            )
                         budget.note(provider, model_id, "200 ok", started, extra=f" — {edited.word_count} words")
                         return edited
                     budget.note(provider, model_id, "200 but empty edit", started)
