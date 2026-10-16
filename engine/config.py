@@ -43,9 +43,10 @@ CONFIG_KEYS = (
     "PREMIUM_MODEL_ENABLED",
     "AUTO_PUBLISH_ENABLED",
     "DASHBOARD_ADMIN_TOKEN",
-    # Per-stage provider gate (2026-09-22, t_22a3bbdc). Values: "openrouter"
-    # (the free-model default) or "gemini". Unset/unknown = the dataclass default
-    # (openrouter), so an unset env can never move a stage off the free chain.
+    # Per-stage provider gate (2026-09-22, t_22a3bbdc; default flipped
+    # 2026-10-16, t_5387e209). Values: "gemini" (the canonical lane since
+    # 2026-10-11) or "openrouter". Unset/unknown = the dataclass default
+    # (gemini) — a bare run-batch must not walk a dead OR chain.
     "RESEARCH_PROVIDER",
     "DRAFT_PROVIDER",
     # Non-secret site identity controls. Empty values remain unset, like all
@@ -125,12 +126,14 @@ class Config:
     # 2026-09 key: gemini-flash-lite-latest serves all shapes incl. the real
     # edit prompt (200 in ~23s) — verified live 2026-09-21.
     gemini_edit_model: str = "gemini-flash-lite-latest"
-    # Per-stage provider. Gemini was primary until the 09-16 key 401s (DIAGNOSIS.md
-    # t_541d35ee) and everything ran openrouter-only. edit restored to "gemini"
-    # 2026-09-21 (fresh key + served-model pin, kanban t_8fa118c8); research/draft
-    # stay "openrouter" per the free-models rule.
-    research_provider: str = "openrouter"
-    draft_provider: str = "openrouter"
+    # Per-stage provider. Gemini is the canonical lane since 2026-10-11
+    # (kanban t_f4d2aabc): the OpenRouter key in .env is revoked (401 "User not
+    # found") and every OR :free hop died at auth, so a bare run-batch outside
+    # the wrapper must default to the green Gemini lane, not walk the dead OR
+    # chain. Explicit RESEARCH_PROVIDER/DRAFT_PROVIDER=openrouter still works
+    # for those who opt in with a valid key.
+    research_provider: str = "gemini"
+    draft_provider: str = "gemini"
     edit_provider: str = "gemini"
     # Model rule: FREE MODELS ONLY until production (Guy 2026-08-11).
     # Chain reordered 2026-09-21 (t_02673f32, DIAGNOSIS.md t_541d35ee): both
@@ -192,25 +195,27 @@ class Config:
 def _stage_provider(env: Mapping[str, str], key: str) -> str:
     """Read a per-stage provider override from the resolved environment.
 
-    Default and unknown values fall back to ``openrouter`` — the free-model
-    chain Guy's 2026-08-11 rule mandates — so a typo (or an unset var) can never
-    silently move a stage onto a paid provider. Only an explicit
-    ``gemini``/``openrouter`` is honoured, and it is announced by name on stderr
-    (never by value): the stage-provider change is a spend-policy decision Guy
-    signs off on per run, so it must be visible in the run log.
+    Default and unknown values fall back to ``gemini`` — the canonical free
+    lane since 2026-10-11 (kanban t_f4d2aabc), after the OpenRouter key in
+    .env was revoked and every OR :free hop began 401ing at auth. A typo (or
+    an unset var) can therefore never silently walk the dead OR chain; only
+    an explicit ``gemini``/``openrouter`` is honoured, and it is announced by
+    name on stderr (never by value): the stage-provider change is a
+    spend-policy decision Guy signs off on per run, so it must be visible in
+    the run log.
 
     Named keys only in the message — this never prints a value.
     """
     raw = (env.get(key) or "").strip().lower()
     if not raw:
-        return "openrouter"
+        return "gemini"
     if raw not in STAGE_PROVIDERS:
         print(
             f"[config] {key} is not one of {'/'.join(STAGE_PROVIDERS)} "
-            "— keeping the free openrouter chain",
+            "— keeping the canonical gemini lane",
             file=sys.stderr,
         )
-        return "openrouter"
+        return "gemini"
     # Provider choice is already present in redacted `engine.cli info` and
     # lane-smoke state; keep ordinary CLI stdout/stderr byte-clean so cron
     # wrappers can parse the first line deterministically.
@@ -259,9 +264,9 @@ def load_config(
         premium_enabled=premium,
         auto_publish_enabled=auto_publish,
         dashboard_admin_token=env.get("DASHBOARD_ADMIN_TOKEN", ""),
-        # Stage-provider gate (t_22a3bbdc): research/draft stay on the free
-        # OpenRouter chain unless a run explicitly selects gemini, e.g.
-        #   RESEARCH_PROVIDER=gemini DRAFT_PROVIDER=gemini engine.cli run-batch 1
+        # Stage-provider gate (t_22a3bbdc): canonical lane is gemini.
+        #   RESEARCH_PROVIDER=openrouter DRAFT_PROVIDER=openrouter engine.cli run-batch 1
+        # opts back into the free OpenRouter chain for a run with a valid key.
         research_provider=_stage_provider(env, "RESEARCH_PROVIDER"),
         draft_provider=_stage_provider(env, "DRAFT_PROVIDER"),
         env_overrides=overridden,
