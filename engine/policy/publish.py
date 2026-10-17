@@ -7,9 +7,9 @@ Trust ladder (defaults, configurable in Config):
   L0  manual override         -> always needs_review (Guy signs off every draft)
   L1  auto-publish >=80, after first-N human reviews      [MVP launch default]
       60-79 -> needs_review, <60 -> reject
-  Sensitive topics (tax/legal/medical/visas/banking) are ALWAYS quarantined to
-  human review, regardless of score — per SOUL §8 trust (never auto-publish
-  those).
+  Sensitive topics (tax/legal/medical/visas/banking/insurance) are ALWAYS
+  quarantined to human review, regardless of score — per SOUL §8 trust (never
+  auto-publish those).
 
 Quarantine enforcement (2026-09-20, t_cae3c2d2): the decision is stamped onto
 the Strapi article as `topicDecision` by the draft lane, and the publish lane
@@ -33,7 +33,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-SENSITIVE_TOPICS = {"taxes", "legal", "medical", "visas", "banking"}
+SENSITIVE_TOPICS = {"taxes", "legal", "medical", "visas", "banking", "insurance"}
+
+# Substring signals that mark a category/title/slug text as sensitive. These
+# are substrings (not just the enum set) because categories and titles are
+# free-form. The medical + insurance additions are the 2026-10-18
+# classifier-gap fix (kanban t_dfcdd95f): medical/insurance topics defaulted
+# to category "digital-nomad" and sailed through to auto_publish (live:
+# mental-health-support-digital-nomads, preventive-health-abroad-travel-clinic,
+# travel-insurance-declined-claim-categories all carried auto_publish). The
+# category field alone is not trustworthy, so the title/slug are scanned too.
+SENSITIVE_SIGNALS = (
+    "tax", "legal", "medic", "health", "mental", "vaccin", "clinic",
+    "therap", "prescription", "pharmacy", "doctor",
+    "visa", "residen", "immigr", "bank", "brokerage", "insur",
+)
 
 
 class Decision(str, Enum):
@@ -97,8 +111,19 @@ def apply_policy(
     return PolicyDecision(Decision.REJECT, confidence, "confidence below reject floor")
 
 
-def is_sensitive(category: str | None) -> bool:
-    if not category:
+def is_sensitive(category: str | None, *, title: str | None = None, slug: str | None = None) -> bool:
+    """True when the topic is a sensitive (tax/legal/medical/visa/banking/
+    insurance) subject that must be quarantined to human review.
+
+    The category field alone is NOT trustworthy (t_dfcdd95f): topics default
+    to ``digital-nomad``, so medical/insurance topics were classified
+    auto_publish and reached the auto-publish lane ungated. The title and slug
+    are scanned alongside the category so the actual subject decides, and the
+    medical/insurance signals are explicit rather than inferred from a coarse
+    category. Over-matching fails safe: quarantine only requires human review.
+    """
+    parts = [category or "", title or "", slug or ""]
+    text = " ".join(parts).strip().lower().replace("-", "_")
+    if not text:
         return False
-    cat = category.strip().lower().replace("-", "_")
-    return cat in SENSITIVE_TOPICS or any(s in cat for s in ("tax", "legal", "medic", "visa", "bank"))
+    return any(s in text for s in SENSITIVE_SIGNALS)

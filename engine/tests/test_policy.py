@@ -61,6 +61,43 @@ def test_is_sensitive_detects_categories():
     assert is_sensitive(None) is False
 
 
+def test_is_sensitive_catches_medical_with_generic_category():
+    # Classifier-gap regression (t_dfcdd95f): medical topics default to the
+    # generic "digital-nomad" category and previously sailed through to
+    # auto_publish. The title/slug must be scanned too.
+    assert is_sensitive("digital-nomad",
+                        title="Mental Health Support for Digital Nomads: Therapy, Coverage, and",
+                        slug="mental-health-support-digital-nomads") is True
+    assert is_sensitive("digital-nomad",
+                        title="Preventive Health Abroad: Vaccines, Screening, and the Travel Clinic",
+                        slug="preventive-health-abroad-travel-clinic") is True
+    assert is_sensitive("digital-nomad",
+                        title="Getting Prescriptions and Medication Abroad",
+                        slug="medication-and-prescriptions-abroad") is True
+
+
+def test_is_sensitive_catches_insurance():
+    # Insurance was absent from the sensitive vocabulary entirely; the task
+    # scope explicitly includes banking/insurance subjects.
+    assert is_sensitive("digital-nomad",
+                        title="Travel Insurance Declined Claims: The Six Exclusion Categories",
+                        slug="travel-insurance-declined-claim-categories") is True
+    assert is_sensitive("insurance") is True
+
+
+def test_is_sensitive_keeps_nonsensitive_topics_clear():
+    # Non-sensitive topics must not be quarantined by the broader scan.
+    assert is_sensitive("digital-nomad",
+                        title="Cost of Living in Bali for Digital Nomads",
+                        slug="cost-of-living-in-bali-for-digital-nomads") is False
+    assert is_sensitive("digital-nomad",
+                        title="Best VPN for Digital Nomads",
+                        slug="best-vpn-for-digital-nomads") is False
+    assert is_sensitive("digital-nomad",
+                        title="Tipping Customs Around the World: A Field Guide",
+                        slug="tipping-customs-around-the-world") is False
+
+
 def test_boundary_scores():
     # Exactly at auto-publish threshold, past first-N, non-sensitive
     d = apply_policy(80, articles_reviewed=5)

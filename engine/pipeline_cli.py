@@ -850,7 +850,7 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     articles_reviewed = client.count_published()
     decision = apply_policy(
         seo.confidence,
-        sensitive=is_sensitive(topic["category"]),
+        sensitive=is_sensitive(topic["category"], title=topic["title"], slug=topic["slug"]),
         first_n_human_review=cfg.first_n_human_review,
         articles_reviewed=articles_reviewed,
     )
