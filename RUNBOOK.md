@@ -21,6 +21,7 @@ Logs: `~/nomadomics-v2/logs/strapi-{service.log,service.err}`
 ## Productization roadmap (2026-10-10)
 
 The active hardening roadmap is `~/.hermes/plans/2026-10-10_225256-nomadomics-productization-roadmap.md`.
+The reusable blog-production design is `~/nomadomics-v2/docs/REPLICABLE-BLOG-SYSTEM-SPEC.md`.
 The P0 contract is `~/nomadomics-v2/docs/PRODUCT-CONTRACT.md`; the dated baseline is
 `~/nomadomics-v2/docs/PRODUCT-BASELINE-2026-10-10.md`. Execute phases one at a time and
 use fresh command output for live decisions. Do not infer current state from dated counts in
@@ -131,6 +132,38 @@ unverified OpenRouter `:free` list after a Gemini failure. The OpenRouter chain
 remains available only when a stage explicitly selects it or the Gemini key is
 absent; non-retryable `400/401/402/403/404/422` failures skip a hop instead of
 burning retries.
+
+### Perplexity Sonar research verifier (added 2026-10-12)
+
+Gemini remains the primary research provider and continues to own stage routing.
+When `NOMADOMICS_SONAR_VERIFY=1` and `OPENROUTER_MASTER_API_KEY` are available, `engine/research/research.py`
+runs exactly one `perplexity/sonar` pass for every topic after Gemini returns.
+This is research-only: it cannot select the draft/edit provider or publish.
+
+- The verifier uses the separate paid OpenRouter master account, not the
+  free-testing `OPENROUTER_API_KEY`; `~/.hermes/scripts/nomadomics_daily_draft.sh`
+  injects only that one key into the child process and never prints it.
+- Sonar rejects `response_format=json_object` (HTTP 400), so its request uses
+  `response_format={"type":"text"}`; the engine's existing tolerant JSON parser
+  still validates/extracts the result.
+- OpenRouter `message.annotations` citation URLs are preserved and fill missing
+  fact URLs. Gemini facts stay first; unique Sonar facts are appended up to six
+  total, with URL/claim de-duplication.
+- One key-free receipt per verifier attempt is appended to
+  `engine/state/research-verifier.jsonl` (status, fact/citation counts, and
+  provider-reported cost only). A transient Sonar failure does not discard a
+  valid Gemini result, but the receipt exposes the degraded pass for monitoring.
+- The measured compatibility probe returned HTTP 200, five structured facts,
+  twenty citation annotations, and a provider-reported cost of about `$0.006`
+  for a ~1,000-token research call. There is intentionally no daily cap by
+  the current operating decision; the batch still performs one call per topic.
+
+To verify the route without running a batch:
+```sh
+env -u PYTHONPATH OPENROUTER_MASTER_API_KEY="<from secure env>" \
+  .venv/bin/python /Users/guy/.hermes/cache/scratch/probe_nomadomics_sonar_exact.py
+```
+The scratch probe must never be committed and must not print key material.
 
 - Stage map: `engine/research/` → `engine/writer/` → `engine/editor/` → `engine/seo/analyze.py`.
 - The writer sends an explicit `max_tokens=6000` budget so Gemini does not return
@@ -312,6 +345,15 @@ browser Gemini cover receipt and all existing policy/invariant gates pass.
   publishes by itself). Legacy articles created before the field also gate on
   the draft journal (`engine/state/pipeline.jsonl`, joined by documentId) so
   quarantined tax/legal content is protected even without the server-side field.
+  Review checklist for any quarantine-class article: verify a **standard
+  disclaimer** is present in the body before release approval — an explicit
+  not-advice clause ("not legal/tax/financial advice") AND a consult-a-qualified-
+  professional clause — and treat a missing disclaimer as a required edit, not a
+  nit. The engine now enforces this as a publish-lane invariant (quarantine-class
+  articles fail the 13:00 candidate loop's invariant check with the missing
+  clause named, and released articles are still blocked until the disclaimer is
+  added) — leaving the checklist advisory-only is no longer an option
+  (enforced 2026-10-21, t_d0608cc0).
 - Cover integrity: `node frontend/scripts/check-images.mjs` (snapshot:
   `frontend/scripts/published-slugs.json` — the runner does NOT update it;
   refresh it when publishing outside the runner).

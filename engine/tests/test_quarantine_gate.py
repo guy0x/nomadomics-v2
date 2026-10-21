@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import publish  # noqa: E402
-from publish import article_decision, is_quarantined  # noqa: E402
+from publish import article_decision, is_quarantined, publish_one  # noqa: E402
 
 
 class FakeClient:
@@ -266,10 +266,27 @@ def test_release_approval_overrides_field_and_journal(tmp_path, monkeypatch):
     client = FakeClient([make_article(slug="rel-tax", decision="quarantine",
                                       confidence=88, doc_id="rel-tax-doc")])
 
-    result = publish.publish_one(client, None, dry_run=True)  # type: ignore[arg-type]
+    result = publish_one(client, None, dry_run=True)  # type: ignore[arg-type]
+
+    assert result["event"] == "skip"
+    assert "invariant-blocked" in result["reason"]
+    assert "disclaimer" in result["reason"]
+
+    # The standard disclaimer now present — eligible again, exactly as the
+    # pre-invariant contract expected.
+    body = "\n\n".join([
+        "This article is for general information only and is not legal, tax, or "
+        "financial advice. Consult a qualified professional for your "
+        "jurisdiction before acting on anything here.",
+        make_article(slug="rel-tax", decision="quarantine",
+                     confidence=88, doc_id="rel-tax-doc")["bodyMarkdown"],
+    ])
+    client.articles[0]["bodyMarkdown"] = body
+
+    result = publish_one(client, None, dry_run=True)
 
     assert result["event"] == "dry_run"
-    assert result["slug"] == "rel-tax"  # released -> eligible again
+    assert result["slug"] == "rel-tax"
 
 
 def test_release_approval_record_writes_ledger(tmp_path, monkeypatch):

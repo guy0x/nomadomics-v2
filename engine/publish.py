@@ -75,6 +75,16 @@ MIN_CONFIDENCE = 75
 PUSH_TIMEOUT_SECONDS = 180
 ASSET_VERIFY_ATTEMPTS = 10
 ASSET_VERIFY_DELAY_SECONDS = 30.0
+# Page live check (2026-10-16, from finding t_770b64dd -> t_26245334).
+# The page renders dynamically — the frontend fetches Strapi server-side
+# through the Cloudflare tunnel (strapi.nomadomics.blog -> localhost:1337),
+# so a tunnel flap surfaces as HTTP 500 on the page even though the publish
+# write already succeeded (measured live 2026-10-11: Strapi 200 + event=
+# published, page 500 for >1h). The check therefore retries exactly like the
+# asset check: transient origin blips pass, a persistent outage still ends
+# `live: false` after the budget — never a fake pass.
+PAGE_VERIFY_ATTEMPTS = 6
+PAGE_VERIFY_DELAY_SECONDS = 10.0
 
 # Quarantine gate (2026-09-20, from finding t_cae3c2d2). The draft lane records
 # a policy decision per article; for sensitive topics (taxes/legal/medical/
@@ -593,6 +603,24 @@ def is_quarantined(article: dict, journal: set[str] | None = None, approvals: se
     return False
 
 
+def disclaimer_gate_class(article: dict, journal: set[str] | None = None) -> bool:
+    """Quarantine-class membership for the DISCLAIMER invariant (t_d0608cc0).
+
+    Same two signals as ``is_quarantined`` (the ``topicDecision`` field OR the
+    draft-journal join) but deliberately WITHOUT the release-approval exemption:
+    a recorded release approval un-gates auto-publish, yet the tax/legal
+    disclaimer must still hold when the released article competes in the normal
+    lane — release approval is exactly when the disclaimer matters most. The
+    publish loop passes this flag into ``article_invariant_errors(quarantined=)``
+    so a quarantine-class body without the standard disclaimer is
+    invariant-blocked (fail-closed, named in the skip diagnostics) instead of
+    shipping clean after a release.
+    """
+    if article_decision(article) in QUARANTINED_DECISIONS:
+        return True
+    return bool(journal and article.get("documentId") in journal)
+
+
 def _skip_reason(event: str, reason: str) -> dict:
     return {"event": event, "reason": reason}
 
@@ -1054,6 +1082,57 @@ def verify_assets_live(slug: str, site: str, *, attempts: int | None = None,
     return {"assetsLive": False, "assetStatus": status, "assetAttempts": n}
 
 
+def page_verify_bounds() -> tuple[int, float]:
+    """Attempts + delay for the page live check (env-overridable for rehearsals)."""
+    try:
+        attempts = max(1, int(os.environ.get("NOMADOMICS_PAGE_VERIFY_ATTEMPTS", PAGE_VERIFY_ATTEMPTS)))
+    except (TypeError, ValueError):
+        attempts = PAGE_VERIFY_ATTEMPTS
+    try:
+        delay = max(0.0, float(os.environ.get("NOMADOMICS_PAGE_VERIFY_DELAY", PAGE_VERIFY_DELAY_SECONDS)))
+    except (TypeError, ValueError):
+        delay = PAGE_VERIFY_DELAY_SECONDS
+    return attempts, delay
+
+
+def verify_page_live(live_url: str, title: str, *, attempts: int | None = None,
+                     delay: float | None = None) -> tuple[bool, int, str | None]:
+    """Assert the article page renders HTTP 200 with the title marker, retrying.
+
+    Same shape as ``verify_assets_live``: a bounded retry absorbs transient
+    origin failures (Vercel redeploy window, Cloudflare tunnel flap -> the
+    frontend's server-side Strapi fetch 500s for a minute or two) that would
+    otherwise be instant false negatives. It does NOT mask a genuine miss:
+    an origin that stays down past the budget still reports the page as NOT
+    live (returned as ``(False, last_status, error)``), so ``publish_one``
+    ends ``live: false`` and the runner exits non-zero as before.
+
+    Returns ``(live: bool, last/http status: int, error: str | None)``.
+    """
+    n, d = page_verify_bounds()
+    if attempts is not None:
+        n = max(1, int(attempts))
+    if delay is not None:
+        d = max(0.0, float(delay))
+
+    marker = (title or "").split()[0] if title else "\x00"  # first word of the title must appear
+    status = 0
+    err: str | None = None
+    for _ in range(n):
+        try:
+            r = httpx.get(live_url, timeout=25, follow_redirects=True)
+            status = r.status_code
+            if status == 200 and marker in r.text:
+                return True, status, None
+            err = f"HTTP {status}"
+        except Exception as e:  # noqa: BLE001
+            err = str(e)
+            status = 0  # unreachable / DNS / timeout -> not live
+        if _ < n - 1 and d:
+            time.sleep(d)
+    return False, status, err
+
+
 def write_slug_snapshot(slugs) -> bool:
     """Refresh frontend/scripts/published-slugs.json from the live published set.
 
@@ -1258,8 +1337,13 @@ def publish_one(
         # With the corpus fetched above, the repetition + internal-link gates
         # run too. Fail closed (t_8518b65e): if a gate ERRORS, the article is
         # journaled and blocked — an error is never waved through as a pass.
+        # Disclaimer gate (t_d0608cc0): quarantine-class articles (including
+        # RELEASED ones — the approval does not waive the disclaimer) must
+        # carry the standard disclaimer or they are invariant-blocked here.
         try:
-            errors = article_invariant_errors(a, published_corpus=published_corpus)
+            errors = article_invariant_errors(
+                a, published_corpus=published_corpus,
+                quarantined=disclaimer_gate_class(a, journal))
         except Exception as e:  # noqa: BLE001 — gate error blocks the article
             _append_state({
                 "ts": _now_iso(),
@@ -1298,7 +1382,9 @@ def publish_one(
             if int(a.get("confidence") or 0) < MIN_CONFIDENCE:
                 continue
             try:
-                errors = article_invariant_errors(a, published_corpus=published_corpus)
+                errors = article_invariant_errors(
+                    a, published_corpus=published_corpus,
+                    quarantined=disclaimer_gate_class(a, journal))
             except Exception as e:  # noqa: BLE001 — diagnostics must not crash
                 errors = [f"invariant gate error ({type(e).__name__})"]
             if errors:
@@ -1538,13 +1624,16 @@ def publish_one(
         site = (os.environ.get("SITE_URL") or "https://www.nomadomics.blog").rstrip("/")
         live_url = f"{site}/{slug}"
         result["liveUrl"] = live_url
-        try:
-            r = httpx.get(live_url, timeout=25, follow_redirects=True)
-            result["httpStatus"] = r.status_code
-            page_live = r.status_code == 200 and (title.split()[0] in r.text)
-        except Exception as e:
-            page_live = False
-            result["verifyError"] = str(e)
+        # Page render check gets the same bounded retry as the asset check
+        # (2026-10-16, finding t_770b64dd): the page fetches Strapi server-side
+        # through the Cloudflare tunnel, so a tunnel flap surfaces as HTTP 500
+        # for a minute or two even though the publish write already succeeded.
+        # Retry absorbs the blip; a persistent outage still stays live=false.
+        print(f"  verifying page is live (up to {page_verify_bounds()[0]} attempts)…")
+        page_live, http_status, verify_error = verify_page_live(live_url, title)
+        result["httpStatus"] = http_status
+        if verify_error is not None:
+            result["verifyError"] = verify_error
 
         if not skip_image and not no_commit:
             # This run was supposed to ship art -> its live status is part of

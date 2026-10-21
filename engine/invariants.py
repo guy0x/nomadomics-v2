@@ -10,7 +10,9 @@ the metaDescription is distinct from the excerpt, carries no migration template
 tail, ends in terminal punctuation and fits 120-160c; neither meta field ends
 in a literal '...'; the metaTitle fits the 60c SERP budget. A citation is real
 only when the supplied fetch returns a page whose host matches the URL.
-Unreachable, empty, and host-mismatched results are not real. This module does
+Unreachable, empty, and host-mismatched results are not real. A
+quarantine-class article (``quarantined=True``, publish lane only) must also
+carry the standard tax/legal disclaimer. This module does
 not publish and does not read secrets.
 """
 from __future__ import annotations
@@ -281,10 +283,57 @@ def corpus_repetition_issues(
     return issues
 
 
+# --- Quarantine-class disclaimer gate (t_d0608cc0, 2026-10-21) ----------------
+# Compliance review t_1eb103cb: 'freelance-contracts-across-borders' (quarantine
+# class, confidence 92) shipped an 8,554-char body with ZERO disclaimer language
+# and would have passed every publish gate but for the quarantine skip. A
+# quarantine-class article (tax/legal/medical/visas/banking — "always human
+# review" topics) must carry BOTH clauses before the publish lane passes it:
+#   1. an explicit not-advice clause — "not legal/tax/financial advice"
+#   2. a consult clause             — "consult a qualified professional"
+# These patterns ARE the contract: reasonable phrasings are accepted (matching
+# is case-insensitive and stays within one sentence — no '.' or newline may
+# bridge the words), and anything outside them is a missing disclaimer.
+# Non-quarantine articles are NOT gated (the general lane stays
+# disclaimer-optional); the flag arrives from publish.disclaimer_gate_class.
+DISCLAIMER_ADVICE_RE = re.compile(
+    r"(?i)\bnot\b[^.\n]{0,80}?\b(?:legal|tax(?:es)?|financial|finance|medical|"
+    r"investment|professional|accounting|immigration)\b[^.\n]{0,80}?\badvice\b"
+)
+DISCLAIMER_CONSULT_RE = re.compile(
+    r"(?i)\b(?:consult|talk to|speak with|speak to|reach out to|seek)\b"
+    r"[^.\n]{0,80}?\b(?:qualified|licensed|certified|registered|professional|"
+    r"advisers?|advisors?|accountants?|attorneys?|lawyers?|tax|legal|financial|"
+    r"immigration|expert)s?\b"
+)
+
+
+def disclaimer_issues(body: str) -> list[str]:
+    """Named failures for the quarantine-class disclaimer requirement.
+
+    BOTH clauses must appear somewhere in the body (see the pattern contract
+    above ``DISCLAIMER_ADVICE_RE``). The error names exactly which clause is
+    missing so the required edit is obvious.
+    """
+    text = body or ""
+    missing: list[str] = []
+    if not DISCLAIMER_ADVICE_RE.search(text):
+        missing.append("'not legal/tax/financial advice'")
+    if not DISCLAIMER_CONSULT_RE.search(text):
+        missing.append("'consult a qualified professional'")
+    if not missing:
+        return []
+    return [
+        "quarantine-class body missing required disclaimer clause(s): "
+        + "; ".join(missing)
+    ]
+
+
 def article_invariant_errors(
     article: dict,
     fetch=None,
     published_corpus: list[dict] | None = None,
+    quarantined: bool = False,
 ) -> list[str]:
     """All write/publish invariants for a Strapi article row.
 
@@ -298,6 +347,12 @@ def article_invariant_errors(
     gates. Without it the gate stays inert — the draft lane's write check has
     no body corpus in reach, and fetching one there would add a second read
     the card forbids.
+
+    With ``quarantined=True`` (publish lane only — the draft write lane never
+    passes it, quarantine drafts must still be written for human review) the
+    disclaimer gate runs too: the body must carry the standard
+    not-advice + consult-a-professional disclaimer (t_d0608cc0). Non-quarantine
+    articles are unaffected — the general lane stays disclaimer-optional.
     """
     body = article.get("bodyMarkdown") or ""
     errors = check_write_invariants(
@@ -313,6 +368,8 @@ def article_invariant_errors(
     errors.extend(source_section_issues(body, fetch=fetch))
     errors.extend(opening_pattern_issues(body))
     errors.extend(link_hygiene_issues(body))
+    if quarantined:
+        errors.extend(disclaimer_issues(body))
     if published_corpus is not None:
         errors.extend(corpus_repetition_issues(
             body, published_corpus, own_slug=str(article.get("slug") or "")))

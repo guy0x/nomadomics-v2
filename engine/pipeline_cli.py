@@ -55,6 +55,7 @@ from invariants import (
     ensure_body_citations,
     ensure_internal_links,
     internal_link_issues,
+    disclaimer_issues,
 )
 from freshness import freshness_report
 from publish_ledger import LEDGER as PUBLISH_LEDGER
@@ -1497,6 +1498,22 @@ def main(argv: list[str] | None = None) -> int:
                             f"`python3 ~/.hermes/scripts/nomadomics_backfill_covers.py "
                             f"--slugs {release_slug}` (verify the headline spelling on "
                             "the generated art), then commit and push the PNGs."
+                        )
+                    # Pre-publish disclaimer warning (t_d0608cc0): the release
+                    # approval is the last engine run before the article ships,
+                    # so name any missing clause right here where the operator
+                    # can still fix the body — the engine's publish lane then
+                    # refuses the released article until the disclaimer is in
+                    # the body (test_disclaimer_invariant.py).
+                    for _issue in disclaimer_issues(
+                        str(article.get("bodyMarkdown") or "")
+                    ):
+                        print(
+                            f"⚠️  release: DISCLAIMER MISSING for {release_slug} "
+                            f"— {_issue}. Add a line like: "
+                            "\"This article is for general information only and is "
+                            "not legal, tax, or financial advice; consult a "
+                            "qualified professional for your jurisdiction.\""
                         )
                 else:
                     print(
