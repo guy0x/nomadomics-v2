@@ -51,7 +51,7 @@ export default function SiteFooter() {
                 </Link>
               </li>
               <li>
-                <Link href="/about" className="text-sm text-ink-600 hover:text-brand-700">
+                <Link href="/editorial" className="text-sm text-ink-600 hover:text-brand-700">
                   About &amp; editorial policy
                 </Link>
               </li>
@@ -75,7 +75,7 @@ export default function SiteFooter() {
             Nomadomics is reader-supported. When you buy through links on our
             site we may earn an affiliate commission at no extra cost to you.
             This never influences our rankings or recommendations.{" "}
-            <Link href="/about" className="underline hover:text-ink-700">
+            <Link href="/editorial" className="underline hover:text-ink-700">
               Read our editorial policy
             </Link>
             .

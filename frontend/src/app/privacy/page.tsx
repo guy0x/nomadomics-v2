@@ -83,7 +83,7 @@ export default function PrivacyPage() {
           this page — including any request about your data — write to{" "}
           <a href={CONTACT_MAILTO}>{CONTACT_EMAIL}</a>. Our editorial standards,
           and how we make money, are set out on the{" "}
-          <Link href="/about">About &amp; Editorial Policy</Link> page.
+          <Link href="/editorial">About &amp; Editorial Policy</Link> page.
         </p>
 
         <h2 id="what-we-collect">What we collect</h2>
@@ -172,7 +172,7 @@ export default function PrivacyPage() {
           and health insurance, eSIMs and similar — are affiliate links. If you
           click one and sign up, we may earn a commission. It costs you nothing
           extra and it never influences our rankings or recommendations, as set
-          out in our <Link href="/about">editorial policy</Link>.
+          out in our <Link href="/editorial">editorial policy</Link>.
         </p>
         <p>
           Affiliate links are marked as sponsored in the page&rsquo;s HTML and

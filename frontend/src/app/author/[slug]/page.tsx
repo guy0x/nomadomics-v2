@@ -86,7 +86,12 @@ export default async function AuthorPage({
 
         <header className="max-w-3xl">
           <div className="flex items-center gap-4">
-            <AuthorAvatar name={author.name} size={56} className="text-lg" />
+            <AuthorAvatar
+              name={author.name}
+              src={`/authors/${author.slug}.jpeg`}
+              size={72}
+              className="text-lg"
+            />
             <div>
               <h1 className="font-display text-3xl font-bold leading-tight tracking-tight text-ink-950 sm:text-4xl">
                 {author.name}

@@ -59,10 +59,10 @@ export default function SiteHeader() {
 
         <div className="flex items-center gap-2">
           <Link
-            href="/case-study/nomadomics"
+            href="/editorial"
             className="hidden rounded-md px-3 py-2 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-50 hover:text-ink-950 lg:inline-block"
           >
-            Project
+            About
           </Link>
           <Link
             href="/category/banking"
@@ -102,10 +102,10 @@ export default function SiteHeader() {
             ))}
             <li className="border-b border-ink-100">
               <Link
-                href="/case-study/nomadomics"
+                href="/editorial"
                 className="flex min-h-[44px] items-center text-base font-medium text-ink-800 hover:text-brand-700"
               >
-                Project case study
+                About
               </Link>
             </li>
             <li className="py-3">

@@ -111,3 +111,86 @@
 - Gates on stored body (verified post-write, sha-matched): article_invariant_errors=[] (with live corpus), opening_pattern=[], cliche=[], link_hygiene=[], source_section=[], internal_link=[] with live corpus, 5 citation URLs live (eur-lex, EC eu-us-data-transfers, EDPB 3/2018 PDF, DPF program site, gdpr-info Chapter V). Voice self-check: ≥3 money numbers in first 500 words (€20M/4%/€10M/2%), no banned openers, no "In this article", avg sentence length in normal prose band.
 - topicDecision=quarantine (legal/tax) → release remains HUMAN-ONLY via Strapi admin status flip or `engine.cli publish --release data-residency-gdpr-nomads`; publish lane refuses quarantine-class automatically. Publish child t_63661e05 is released to run after both review cards complete.
 **Status:** in-progress (awaiting human release decision)
+
+## 2026-10-20 — Public Strapi tunnel recovery (HERMES/NIKE gate)
+- 09:50 IDT: public Strapi 530, local admin 200, canonical tipping article 500. Existing com.nomadomics.cloudflared LaunchAgent was unloaded but not disabled. Loaded the documented existing service (exit 0); read-back PID 96301, public admin 200, unauth API 401, article 200. No code, credentials, CMS record or deployment changed; cause of unload unknown.
+- Natural 13:00 publisher b9e3891806f7 completed and its failure incident auto-resolved, but output was a quality-gate SKIP, not a new publication or exercised page-live verification. Output: /Users/guy/.hermes/cron/output/b9e3891806f7/2026-10-20_13-00-44.md.
+- Natural 14:30 invariants + NIKE independent QA remain pending. NIKE card t_d599688f scheduled 14:40, strict no-forced-run/no-ack. Full evidence: /Users/guy/.hermes/build/cron-review/20261020-094750/RECOVERY.md.
+
+## 2026-10-20 — Post-fire correction: origin recovered; output invariant remains HOLD
+- HEPHAESTUS independently confirmed public/local Strapi parity (admin 200, unauth API 401) and the former tipping article 200; NIKE's completed read-only card `t_d599688f` independently verified title, canonical URL, sitemap and card/OG 200. Neither review proved why the tunnel had been unloaded.
+- Publisher's 13:00 natural run completed on a *quality-gate skip* (not a new publish or live-check-path proof), auto-resolving its historical incident. Content-invariants naturally fired late and failed on a **new** electricity card HTTP 0 even though tipping explicitly passed and both electricity image URLs now return 200. Its `http()` converts any network exception into status 0; no re-run was forced because the script writes its own state. NIKE verdict is HOLD pending a clean natural fire, not a green cron.
+- HERMES closed only the old tipping incident (`79ab8f_763115b287b9`) after its specific natural-run pass and direct page check; SQL read-back confirmed `closed`. New electricity incident (`79ab8f_548fdacee27f`) remains `alerted`. Also surfaced: new publish-repair agent cron provider-constraint 403, and ARES Morning Read workspace-budget 403. Exact classes, counts, and bounded owner actions: `/Users/guy/.hermes/build/cron-review/20261020-094750/RECOVERY.md`. No policy, schedule, credentials, CMS or production code altered for these new failures.
+
+## 2026-10-20 — Nomadomics engine status audit outcome (closes il:2026-10-12:t10-37-00-0300-nomadomics-engine)
+
+- **Audit outcome** (source: Needs-Guy digest item, cron `e9a2b934835d`, filed 2026-10-16): **operational** with a non-blocking monitor/control-plane red finding. No remediation was required or applied — the follow-up card (t_8572e3c2) was doc-only, released by Guy 2026-10-20.
+- **Referential note:** no on-disk entry exists under the referenced `il:` ID in either `~/.hermes/issue_log.md` or this log (this log's dated entries jump 2026-10-10 → 2026-10-13). This entry records the outcome in place of the missing original.
+- **Live status verified 2026-10-20 ~22:15 IDT:** `engine.cli info` loads clean (strapi_url localhost:1337, site nomadomics, gemini-flash-lite research/draft/edit lanes, premium disabled); Strapi admin HTTP 200; Mission Control dashboard :8080 not running (manual-start service — resting state, not an incident).
+- **Auto-publish: remains intentionally OFF.** Drafts advance only via explicit `engine.cli` publish actions.
+- **Next check:** next scheduled engine status digest from cron `e9a2b934835d`, or on Guy's request.
+
+## 2026-10-21 — EOR article consolidated review (kanban t_42bf5ec6)
+
+- Merged fact-check (t_58226b76, FAIL/HOLD) × editorial QA (t_ddd661e6, REVISE) for `employer-of-record-for-digital-nomads` (docId nel2xgvszzhrrz6kuj6r55cn). **Consolidated verdict: REVISE IN STRAPI — NOT ready for human release.**
+- Disputes resolved in favor of live-verified figures: pricing **$599–$699/mo** (editorial's $499 placeholders wrong); EOR coverage **Remote 90+ / Deel 150+ / Oyster 120+** (editorial's "180+ jurisdictions" fix text conflated contractor coverage); PE-risk wording adopts the stricter fact-check framing.
+- Release-blocking: coverage table, pricing range, PE-risk rewrite, top-of-article legal/tax disclaimer, 2 dead source URLs + add independent source + retrieval dates, €50k figure (source or remove). Editorial fixes: truncated metaTitle, cut-off metaDescription, near-duplicate paragraph, unrelated Related reading, table differentiation ("Best for" + verified prices). Policy: `topicDecision=unknown` must become explicit at release; release stays human-only (Strapi admin or `engine.cli publish --release employer-of-record-for-digital-nomads`).
+- Consolidated notes appended to the article's NEW `reviewNotes` field (additive `text` column in the article content type; Strapi auto-registered it in the admin edit view). Full report: `docs/CONSOLIDATED-REVIEW-EOR-2026-10-21.md` (untracked).
+- **Incident + resolution:** the notes write via v5 REST PUT has publish semantics by default and created a published row (06:26:15Z). Removed transactionally from Postgres (snapshot: kanban workspace `articles.rows.pre-cleanup.json`); side effect: the pre-existing STALE published ghost (publishedAt 06:00:45Z, status-enum `draft` — the "possible stale publish" the fact-check flagged) is now fully gone. Document is draft-only: id 882, status `in_review`, `published_at` NULL; body/meta byte-identical (sha-verified); site 404'd throughout (article never live).
+- **Heads-up for the next publish-lane worker:** `engine/update_view_config.py`'s baked `config_backup` is stale (missing author/coverImage/topicDecision/siteKey edit-view rows) — running it as-is reverts the admin layout; regenerate before reuse. The `schema.json` reviewNotes addition is uncommitted (commit decision: Guy). Engine tests: 555 passed, 4 pre-existing failures (`skip` vs `dry_run` in release-approval tests) come from in-flight uncommitted `engine/publish.py`/`config.py` changes, not from this task.
+
+**Status:** open (article awaits human revision + release)
+**Decision:** review notes live in the article `reviewNotes` field; published layer for this doc removed to draft-only; release remains human-only.
+
+## 2026-10-21 — Nomadomics publish-lane: ghost origin trace + remediation (kanban t_ba7e5c88)
+
+- **Ghost origin (forensics):**
+  - EOR doc `nel2xgvszzhrrz6kuj6r55cn`: published layer born **06:00:45.710Z**
+    (app status in_review, row 886) at the batch's `create_article()` `POST /api/articles`
+    — v5 D&P publishes on creation when no `?status=` is sent.
+  - Quarantine doc `qa4bubanhlrfcp79d538aaqj`: `PUT /api/articles/qa4bu...` without
+    `?status=` (Strapi log 09:27:51.604Z, 200) created row 887 (publishedAt 09:27:51.586Z)
+    — same leak class as EOR; ** remediated this run. Snapshot sha256 7840f683… (before)
+    / 003aa953… (after); draft row 884 content byte-identical (excl. stamps);
+    rows 882/884 `in_review`, `published_at` NULL; EOR ghost 886 rechecked gone.
+  - Both leaks are v5 draft&publish semantics at two call sites: `StrapiClient.create_article`
+    (no publication param) and the review lane's raw REST PUTs outside the engine client
+    (whose `update_article` refuses write-through for non-published app status).
+- **Fix** `engine/strapi.py` `create_article()` now always sends `?status=draft`
+  (docstring updated); unit tests `engine/tests/test_publish_layer_guard.py` (5)
+  + `test_view_config_merge.py` (2) = **7/7 pass**.
+- **update_view_config.py** rewritten: hardcoded stale `config_backup` removed; merges a
+  curated declaration into the live CM view-config row, `--apply` snapshots live config to
+  `state/backups/` first, preserves unknown rows (author/coverImage/topicDecision/siteKey/
+  reviewNotes + admin layout). Verified == live snapshot, 26/26 metadatas, 10-row edit
+  layout, settings/uid/list equal to t_42bf5ec6 pre-reviewnotes snapshot.
+- **Quarantine backlog (25 stale published layers, topicDecision unknown/draft/rejected)**:
+  docIds 847, 849, 865, 851, 867, 853, 565, 871, 819, 855, 777, 779, 857, 873, 876, 859,
+  839, 841, 789, 795, 797, 845, 863, 869, 881. Prevention by construction; sweep booked as
+  follow-up card `t_ba7e5c88-backlog`.
+- `src/api/article/content-types/article/schema.json` `reviewNotes` additive field: **commit
+  decision belongs to Guy** (any main commit rides the 13:00 Vercel push; backend-only).
+- 4 pre-existing engine test failures (`engine/publish.py` + `config.py` in-flight
+  uncommitted, release-approval `skip` vs `dry_run`): out of scope, documented.
+
+## 2026-10-23 — Nomadomics custom favicon + duplicate slug finding
+
+- Replaced the generic black/white triangle `frontend/src/app/favicon.ico` with a five-size green-and-white globe mark matching the existing `apple-icon.tsx` brand treatment.
+- Verified the production build and served artifact: `npm run build` passed; `GET /favicon.ico` on a local `next start` returned `200 image/x-icon` and matched the source ICO SHA-256.
+- Live Strapi probe found two published API rows for `best-coworking-spaces-for-digital-nomads`: IDs **800** and **801**, same `documentId`, same title/body, with 800 newer (`2026-10-12`) than 801 (`2026-10-07`). After Guy's approval, deleted the older row 801 in a guarded SQL transaction; the API now returns exactly one published row (800). A backup of the deleted row is retained in the Hermes scratch area.
+- Production has not been redeployed: `www.nomadomics.blog/favicon.ico` still serves the old four-size ICO (SHA-256 `2b8ad2d3…`), while the local replacement is the five-size custom ICO (SHA-256 `cda2fbfe…`).
+
+## 2026-10-23 — Editorial route and author roster presentation
+
+- Changed the primary navigation's Project link to **About**, pointing to `/editorial`; the mobile menu now matches.
+- Moved the editorial page to `/editorial`, updated internal links and sitemap, and preserved `/about` as a permanent redirect to `/editorial`.
+- Replaced the author `<ul>/<li>` roster with semantic list roles and card articles so writer names no longer render with bullets.
+- Verified `/editorial` returns `200`, `/about` returns `308` to `/editorial`, the build passes, 24 tests pass, and ESLint reports 0 errors/0 warnings.
+
+## 2026-10-23 — Author portrait generation and Editorial integration
+
+- Generated four casual personal portraits through the authenticated Gemini/Nano Banana browser workflow; rejected an off-brief Thiago candidate and regenerated it with an explicit no-railway/no-camera constraint.
+- Passed visual QA for all four: no visible text, logos, watermarks, artifacts, or work/editorial cues.
+- Added optimized static portraits under `frontend/public/authors/` and wired them into the Editorial roster and author pages with initials fallback support.
+- Verified all four assets return HTTP 200 from the local production server; `/editorial` returns HTTP 200 and includes all four portrait URLs.
+- Final optimized assets: Guy 89,891 bytes; Katie 151,950 bytes; Thiago 97,030 bytes; Vincent 132,611 bytes. Build passed, 24 tests passed, ESLint 0 errors/0 warnings.

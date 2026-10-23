@@ -159,7 +159,7 @@ export default async function HomePage() {
             </p>
             <div className="mt-6 flex justify-center gap-2">
               <Link
-                href="/about"
+                href="/editorial"
                 className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
               >
                 Start with the best guides

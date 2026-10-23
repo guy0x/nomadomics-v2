@@ -1,16 +1,16 @@
+import Image from "next/image";
+
 /**
- * Initials avatar for an author byline.
- *
- * The roster carries no portrait photography, and inventing faces for these bylines
- * would be worse than having none — so identity is carried by initials in brand
- * colours. Swap in next/image here when real portraits exist.
+ * Author portrait with an initials fallback while the static portrait is absent.
  */
 export default function AuthorAvatar({
   name,
+  src,
   size = 44,
   className = "",
 }: {
   name: string;
+  src?: string;
   size?: number;
   className?: string;
 }) {
@@ -25,9 +25,19 @@ export default function AuthorAvatar({
     <span
       aria-hidden="true"
       style={{ width: size, height: size }}
-      className={`flex shrink-0 items-center justify-center rounded-full bg-brand-600 font-display font-bold text-white ${className}`}
+      className={`relative flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-brand-600 font-display font-bold text-white ${className}`}
     >
-      {initials}
+      {src ? (
+        <Image
+          src={src}
+          alt=""
+          fill
+          sizes={`${size}px`}
+          className="object-cover"
+        />
+      ) : (
+        initials
+      )}
     </span>
   );
 }

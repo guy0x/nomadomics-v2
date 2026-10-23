@@ -54,7 +54,7 @@ export default function NomadomicsCaseStudyPage() {
             Visit the live product
           </a>
           <Link
-            href="/about"
+            href="/editorial"
             className="rounded-lg border border-ink-300 px-5 py-3 text-sm font-semibold text-ink-800 transition-colors hover:border-brand-500 hover:text-brand-700"
           >
             Read the editorial policy

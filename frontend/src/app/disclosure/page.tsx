@@ -80,7 +80,7 @@ export default function DisclosurePage() {
         <p>
           Our standards, and how we research and rank the products we recommend,
           are set out in our{" "}
-          <Link href="/about">About &amp; Editorial Policy</Link> page. What we
+          <Link href="/editorial">About &amp; Editorial Policy</Link> page. What we
           collect about readers is covered in our{" "}
           <Link href="/privacy">Privacy Policy</Link>.
         </p>
