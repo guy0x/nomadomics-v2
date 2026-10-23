@@ -194,3 +194,10 @@
 - Added optimized static portraits under `frontend/public/authors/` and wired them into the Editorial roster and author pages with initials fallback support.
 - Verified all four assets return HTTP 200 from the local production server; `/editorial` returns HTTP 200 and includes all four portrait URLs.
 - Final optimized assets: Guy 89,891 bytes; Katie 151,950 bytes; Thiago 97,030 bytes; Vincent 132,611 bytes. Build passed, 24 tests passed, ESLint 0 errors/0 warnings.
+
+## 2026-10-23 — Nomadomics frontend deployment
+
+- Committed and pushed focused frontend release `68fa0ed` (`feat(frontend): add editorial portraits and brand polish`) without staging unrelated workspace changes.
+- First Vercel Git deployment failed because the Strapi Cloudflare tunnel returned HTTP 530 during build; local Strapi remained healthy (`/admin` HTTP 200).
+- Restored the tunnel through the configured cloudflared command, redeployed from the repository root, and received Vercel production deployment `dpl_H4wJSsj3t1za4Uif3mgx2En8HgP2` in `READY` state.
+- Live verification: `/editorial` HTTP 200; legacy `/about` HTTP 308; all four `/authors/*.jpeg` assets HTTP 200; live favicon SHA-256 matches the committed five-size ICO (`cda2fbfe…`); Editorial HTML contains all four portrait URLs and no `Project` label.
