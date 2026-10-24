@@ -25,6 +25,14 @@
   --color-ink-900: #384048;
   --color-ink-950: #252b31;
 
+  --color-night-950: #102e2b;
+  --color-night-900: #18423d;
+  --color-sand-50: #fbfaf6;
+  --color-sand-100: #f3efe7;
+  --color-sand-200: #e6ddd1;
+  --color-clay-500: #c7785d;
+  --color-clay-600: #ae634b;
+
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-display), var(--font-inter), ui-sans-serif, sans-serif;
 }
@@ -39,6 +47,27 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-brand-200);
+  color: var(--color-ink-950);
+}
+
+:where(a, button):focus-visible {
+  outline: 3px solid var(--color-clay-500);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Reading progress bar */

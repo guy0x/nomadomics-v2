@@ -17,8 +17,8 @@ export default function SiteFooter() {
               </span>
             </Link>
             <p className="mt-4 max-w-sm text-sm leading-6 text-ink-600">
-              Practical guides to banking, taxes, and logistics for people who
-              earn in one currency and live in another.
+              Practical guides to destinations, logistics, and money for people
+              building a life across borders.
             </p>
           </div>
 
@@ -27,13 +27,13 @@ export default function SiteFooter() {
               Topics
             </h3>
             <ul className="mt-4 space-y-2">
-              {CATEGORIES.map((c) => (
-                <li key={c.slug}>
+              {CATEGORIES.map((category) => (
+                <li key={category.slug}>
                   <Link
-                    href={`/category/${c.slug}`}
+                    href={`/category/${category.slug}`}
                     className="text-sm text-ink-600 hover:text-brand-700"
                   >
-                    {c.name}
+                    {category.name}
                   </Link>
                 </li>
               ))}
@@ -46,18 +46,8 @@ export default function SiteFooter() {
             </h3>
             <ul className="mt-4 space-y-2">
               <li>
-                <Link href="/" className="text-sm text-ink-600 hover:text-brand-700">
-                  Latest articles
-                </Link>
-              </li>
-              <li>
                 <Link href="/editorial" className="text-sm text-ink-600 hover:text-brand-700">
                   About &amp; editorial policy
-                </Link>
-              </li>
-              <li>
-                <Link href="/case-study/nomadomics" className="text-sm text-ink-600 hover:text-brand-700">
-                  Nomadomics project case study
                 </Link>
               </li>
               <li>

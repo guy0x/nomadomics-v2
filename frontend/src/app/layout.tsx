@@ -4,6 +4,7 @@ import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
+import { HOMEPAGE_COPY, HOMEPAGE_HERO_IMAGE } from "@/lib/homepage";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -18,10 +19,10 @@ const display = Space_Grotesk({
 });
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-
 const SITE_NAME = "Nomadomics";
 const SITE_DESCRIPTION =
-  "Practical guides to multi-currency banking, nomad taxes, and geoarbitrage — earn in one currency, live in another.";
+  "Independent guides for choosing a base, planning the move, and setting up money across borders.";
+const SITE_TITLE = "Nomadomics — Travel Guides for Living Well Abroad";
 
 /**
  * Site-level identity for crawlers. Article pages emit their own BlogPosting;
@@ -60,15 +61,32 @@ const siteJsonLd = {
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Nomadomics - Money Tips for Travelers",
+    default: SITE_TITLE,
     template: "%s · Nomadomics",
   },
   description: SITE_DESCRIPTION,
+  alternates: { canonical: "/" },
   openGraph: {
     siteName: SITE_NAME,
     type: "website",
+    url: "/",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: [
+      {
+        url: HOMEPAGE_HERO_IMAGE,
+        width: 1024,
+        height: 572,
+        alt: HOMEPAGE_COPY.heroAlt,
+      },
+    ],
   },
-  twitter: { card: "summary_large_image" },
+  twitter: {
+    card: "summary_large_image",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: [HOMEPAGE_HERO_IMAGE],
+  },
   robots: { index: true, follow: true },
   verification: {
     google: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION,
@@ -81,13 +99,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col bg-white">
         <script
           type="application/ld+json"
+          // Static, locally constructed site identity only; no CMS or user content enters this JSON.
           dangerouslySetInnerHTML={{ __html: JSON.stringify(siteJsonLd) }}
         />
-        {/* RSS autodiscovery. Rendered as a hoisted <link> rather than
-            `metadata.alternates.types`: a page that sets its own `alternates`
-            (every article sets `canonical`) replaces the parent's object and
-            silently drops the feed link. Relative href on purpose — the apex
-            host is still a launch item, and this must not inherit it. */}
+        {/* RSS autodiscovery stays relative so it survives host changes. */}
         <link
           rel="alternate"
           type="application/rss+xml"

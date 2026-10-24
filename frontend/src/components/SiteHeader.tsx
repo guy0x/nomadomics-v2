@@ -7,27 +7,19 @@ import { CATEGORIES } from "@/lib/categories";
 import { Globe, Menu, X } from "./Icons";
 
 /**
- * Site header with a mobile menu.
- *
- * The desktop nav and the money CTA are both hidden below `md`, which used to
- * leave a phone with nothing but the logo — topic pages were reachable only by
- * scrolling to the footer. This is a client component purely for the toggle.
+ * Site header with a mobile menu. The homepage owns the single intent bridge;
+ * header and menu remain navigation-only so readers do not see duplicate CTAs.
  */
 export default function SiteHeader() {
   const pathname = usePathname();
-  // The panel is open only while we are still on the path it was opened from, so
-  // a navigation closes it without any effect resetting state. Do NOT close it
-  // from the link's onClick: unmounting the anchor mid-click cancels the
-  // browser's default navigation and the tap does nothing.
   const [openedFor, setOpenedFor] = useState<string | null>(null);
   const open = openedFor === pathname;
   const toggle = () => setOpenedFor(open ? null : pathname);
 
-  // Escape closes the panel.
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpenedFor(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenedFor(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -46,13 +38,13 @@ export default function SiteHeader() {
         </Link>
 
         <nav className="hidden items-center gap-1 md:flex" aria-label="Primary">
-          {CATEGORIES.map((c) => (
+          {CATEGORIES.map((category) => (
             <Link
-              key={c.slug}
-              href={`/category/${c.slug}`}
+              key={category.slug}
+              href={`/category/${category.slug}`}
               className="rounded-md px-3 py-2 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-50 hover:text-ink-950"
             >
-              {c.name}
+              {category.name}
             </Link>
           ))}
         </nav>
@@ -63,12 +55,6 @@ export default function SiteHeader() {
             className="hidden rounded-md px-3 py-2 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-50 hover:text-ink-950 lg:inline-block"
           >
             About
-          </Link>
-          <Link
-            href="/category/banking"
-            className="hidden rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-700 md:inline-block"
-          >
-            Best accounts
           </Link>
           <button
             type="button"
@@ -90,30 +76,22 @@ export default function SiteHeader() {
           className="border-t border-ink-100 bg-white md:hidden"
         >
           <ul className="mx-auto max-w-6xl px-4 py-1 sm:px-6">
-            {CATEGORIES.map((c) => (
-              <li key={c.slug} className="border-b border-ink-100">
+            {CATEGORIES.map((category) => (
+              <li key={category.slug} className="border-b border-ink-100">
                 <Link
-                  href={`/category/${c.slug}`}
+                  href={`/category/${category.slug}`}
                   className="flex min-h-[44px] items-center text-base font-medium text-ink-800 hover:text-brand-700"
                 >
-                  {c.name}
+                  {category.name}
                 </Link>
               </li>
             ))}
-            <li className="border-b border-ink-100">
+            <li>
               <Link
                 href="/editorial"
                 className="flex min-h-[44px] items-center text-base font-medium text-ink-800 hover:text-brand-700"
               >
                 About
-              </Link>
-            </li>
-            <li className="py-3">
-              <Link
-                href="/category/banking"
-                className="flex min-h-[44px] items-center justify-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white"
-              >
-                Best accounts
               </Link>
             </li>
           </ul>

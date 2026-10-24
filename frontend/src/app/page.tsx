@@ -1,131 +1,126 @@
 import Link from "next/link";
 import Image from "next/image";
 import { getPublishedArticles } from "@/lib/strapi";
-import { CATEGORIES } from "@/lib/categories";
+import { CATEGORIES, categoryForSlug } from "@/lib/categories";
 import ArticleCard from "@/components/ArticleCard";
+import CategoryIcon from "@/components/CategoryIcon";
+import { ArrowRight } from "@/components/Icons";
+import {
+  HOMEPAGE_COPY,
+  HOMEPAGE_HERO_IMAGE,
+  moneySetupHref,
+  selectHomepageArticles,
+} from "@/lib/homepage";
 import { cardImageFor } from "@/lib/images";
-import { ArrowRight, TrendingUp } from "@/components/Icons";
 
 export const revalidate = 300;
 
 export default async function HomePage() {
   const articles = await getPublishedArticles();
-  // "Start here" = the flagship guide (pinned by publish recency of the engine's
-  // strongest draft, not an unexplained editorial opinion).
-  const startHere =
-    articles.find((a) => a.slug === "best-countries-for-remote-workers") ?? articles[0];
-  const rest = articles.filter((a) => a.slug !== startHere?.slug);
-  const latest = rest.slice(0, 9);
+  const { lead, featured, latest, moneySetup } = selectHomepageArticles(articles);
+  const leadCategory = lead ? categoryForSlug(lead.slug) : null;
+  const moneySetupLabel = moneySetup
+    ? HOMEPAGE_COPY.moneySetupLabel
+    : HOMEPAGE_COPY.moneySetupFallbackLabel;
 
   return (
     <>
-      {/* Hero — typography-led money-frame */}
-      <section className="border-b border-ink-100 bg-gradient-to-b from-ink-50 to-white">
-        <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
-          <div className="max-w-3xl">
-            <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-brand-200 bg-white px-3 py-1 text-xs font-semibold text-brand-700">
-              <TrendingUp className="h-3.5 w-3.5" />
-              Money tips for travelers — no fluff, all numbers
+      <section
+        aria-labelledby="home-title"
+        className="overflow-hidden bg-night-950 text-sand-50"
+      >
+        <div className="mx-auto grid max-w-7xl lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="flex flex-col justify-center px-4 py-14 sm:px-6 sm:py-16 lg:py-20 xl:px-10">
+            <p className="mb-5 text-xs font-semibold uppercase tracking-[0.2em] text-sand-200">
+              {HOMEPAGE_COPY.eyebrow}
             </p>
-            <h1 className="font-display text-5xl font-extrabold leading-[1.05] tracking-tight text-ink-950 sm:text-6xl">
-              Keep more of what you earn.
-              <br />
-              Live{" "}
-              <span className="text-brand-600">wherever you want.</span>
+            <h1
+              id="home-title"
+              className="max-w-xl font-display text-4xl font-bold leading-[1.02] tracking-[-0.04em] text-sand-50 sm:text-6xl lg:text-7xl"
+            >
+              {HOMEPAGE_COPY.title}
             </h1>
-            <p className="mt-6 max-w-2xl text-lg leading-8 text-ink-600">
-              No-fluff money guides for people who work online and sleep in a
-              different timezone — banking that doesn&apos;t bleed you, taxes you
-              can actually understand, and the real cost of every border.
+            <p className="mt-6 max-w-lg text-lg leading-8 text-sand-200">
+              {HOMEPAGE_COPY.intro}
             </p>
-
-            <div className="mt-9 flex flex-wrap gap-2">
-              {CATEGORIES.map((c) => (
-                <Link
-                  key={c.slug}
-                  href={`/category/${c.slug}`}
-                  className="rounded-full border border-ink-200 bg-white px-4 py-2 text-sm font-medium text-ink-700 transition-colors hover:border-brand-400 hover:text-brand-700"
-                >
-                  {c.name}
-                </Link>
-              ))}
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <Link
+                href={moneySetupHref(moneySetup)}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-sand-50 px-6 text-sm font-bold text-night-950 transition-colors hover:bg-sand-100"
+              >
+                {moneySetupLabel}
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+              <Link
+                href="/category/cities"
+                className="inline-flex min-h-12 items-center justify-center rounded-full border border-sand-200/50 px-6 text-sm font-semibold text-sand-50 transition-colors hover:border-sand-50 hover:bg-white/10"
+              >
+                {HOMEPAGE_COPY.destinationsLabel}
+              </Link>
             </div>
           </div>
 
-          {/* Honest stat strip */}
-          <dl className="mt-14 grid max-w-2xl grid-cols-3 gap-6 border-t border-ink-200 pt-8">
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wider text-ink-500">Guides</dt>
-              <dd className="mt-1 font-display text-3xl font-extrabold text-ink-950">{articles.length}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wider text-ink-500">Topics</dt>
-              <dd className="mt-1 font-display text-3xl font-extrabold text-ink-950">{CATEGORIES.length}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wider text-ink-500">Cost to read</dt>
-              <dd className="mt-1 font-display text-3xl font-extrabold text-brand-600">$0</dd>
-            </div>
-          </dl>
+          <figure className="relative min-h-[20rem] overflow-hidden sm:min-h-[27rem] lg:min-h-[38rem]">
+            <Image
+              src={HOMEPAGE_HERO_IMAGE}
+              alt={HOMEPAGE_COPY.heroAlt}
+              fill
+              priority
+              sizes="(max-width: 1023px) 100vw, 55vw"
+              className="object-cover object-center"
+            />
+            <div
+              aria-hidden="true"
+              className="absolute inset-0 bg-gradient-to-t from-night-950/65 via-transparent to-transparent"
+            />
+            <figcaption className="absolute bottom-5 left-5 right-5 text-sm font-medium text-white sm:bottom-7 sm:left-7">
+              {HOMEPAGE_COPY.heroCaption}
+            </figcaption>
+          </figure>
         </div>
       </section>
 
-      {/* Start here — flagship guide with real cover image */}
-      {startHere && (
-        <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
-          <div className="mb-6 flex items-baseline justify-between">
-            <h2 className="font-display text-2xl font-bold text-ink-950">Start here</h2>
-            <span className="text-sm text-ink-500">the guide that saves you the most</span>
+      <section
+        id="topics"
+        aria-labelledby="topics-title"
+        className="border-b border-sand-200 bg-sand-50"
+      >
+        <div className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:py-16">
+          <div className="max-w-2xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-700">
+              {HOMEPAGE_COPY.pillarsEyebrow}
+            </p>
+            <h2
+              id="topics-title"
+              className="mt-3 font-display text-3xl font-bold tracking-tight text-night-950 sm:text-4xl"
+            >
+              {HOMEPAGE_COPY.pillarsTitle}
+            </h2>
+            <p className="mt-3 text-base leading-7 text-ink-600">
+              {HOMEPAGE_COPY.pillarsIntro}
+            </p>
           </div>
-          <Link
-            href={`/${startHere.slug}`}
-            className="group grid overflow-hidden rounded-2xl border border-ink-200 bg-white transition-shadow hover:shadow-lg md:grid-cols-2"
-          >
-            <div className="relative aspect-[16/9] bg-brand-50 md:aspect-auto md:min-h-[21rem]">
-              <Image
-                src={cardImageFor(startHere.slug)}
-                alt={startHere.title}
-                fill
-                sizes="(max-width: 768px) 100vw, 50vw"
-                className="object-cover"
-                priority
-              />
-            </div>
-            <div className="flex flex-col justify-center p-6 sm:p-8">
-              <span className="mb-3 inline-flex w-fit rounded-full bg-brand-600 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white">
-                Start here
-              </span>
-              <h3 className="font-display text-2xl font-bold leading-tight text-ink-950 group-hover:text-brand-700 sm:text-3xl">
-                {startHere.title}
-              </h3>
-              {startHere.excerpt && (
-                <p className="mt-3 text-base leading-7 text-ink-600">{startHere.excerpt}</p>
-              )}
-              <span className="mt-5 inline-flex items-center gap-2 font-semibold text-brand-700">
-                Read the guide
-                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-              </span>
-            </div>
-          </Link>
-        </section>
-      )}
 
-      {/* Category grid */}
-      <section className="border-y border-ink-100 bg-ink-50">
-        <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
-          <h2 className="mb-6 font-display text-2xl font-bold text-ink-950">Browse by topic</h2>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {CATEGORIES.map((c) => (
+          <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {CATEGORIES.map((category) => (
               <Link
-                key={c.slug}
-                href={`/category/${c.slug}`}
-                className="group flex items-start gap-4 rounded-2xl border border-ink-200 bg-white p-5 transition-shadow hover:shadow-md"
+                key={category.slug}
+                href={`/category/${category.slug}`}
+                className="group flex min-h-36 flex-col justify-between rounded-2xl border border-sand-200 bg-white p-5 transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-1 hover:border-brand-300 hover:shadow-lg"
               >
-                <span>
-                  <span className="block font-display text-base font-bold text-ink-950 group-hover:text-brand-700">
-                    {c.name}
+                <span className="flex items-center justify-between">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-50 text-brand-700">
+                    <CategoryIcon slug={category.slug} className="h-5 w-5" />
                   </span>
-                  <span className="mt-0.5 block text-sm text-ink-600">{c.tagline}</span>
+                  <ArrowRight className="h-4 w-4 text-ink-400 transition-transform group-hover:translate-x-1 group-hover:text-brand-700" />
+                </span>
+                <span>
+                  <span className="mt-5 block font-display text-base font-bold text-night-950 group-hover:text-brand-700">
+                    {category.name}
+                  </span>
+                  <span className="mt-1 block text-sm leading-5 text-ink-600">
+                    {category.tagline}
+                  </span>
                 </span>
               </Link>
             ))}
@@ -133,44 +128,177 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* Latest feed */}
-      <section className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
-        <div className="mb-6 flex items-baseline justify-between">
-          <h2 className="font-display text-2xl font-bold text-ink-950">Latest articles</h2>
-          <span className="text-sm text-ink-500">one new guide most weekdays</span>
+      <section
+        aria-labelledby="picks-title"
+        className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:py-20"
+      >
+        <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-700">
+              {HOMEPAGE_COPY.picksEyebrow}
+            </p>
+            <h2
+              id="picks-title"
+              className="mt-3 font-display text-3xl font-bold tracking-tight text-night-950 sm:text-4xl"
+            >
+              {HOMEPAGE_COPY.picksTitle}
+            </h2>
+          </div>
+          <p className="max-w-sm text-sm leading-6 text-ink-600 sm:text-right">
+            {HOMEPAGE_COPY.picksIntro}
+          </p>
         </div>
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {latest.map((a, i) => (
-            <ArticleCard key={a.documentId} article={a} priority={i < 3} />
-          ))}
+
+        {lead ? (
+          <div
+            className={
+              featured.length > 0
+                ? "grid gap-6 lg:grid-cols-[minmax(0,1.18fr)_minmax(16rem,0.82fr)]"
+                : "max-w-3xl"
+            }
+          >
+            <Link
+              href={`/${lead.slug}`}
+              className="group overflow-hidden rounded-3xl border border-sand-200 bg-white transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-1 hover:border-brand-300 hover:shadow-xl"
+            >
+              <div className="relative aspect-[16/10] overflow-hidden bg-sand-100">
+                <Image
+                  src={cardImageFor(lead.slug)}
+                  alt={lead.title}
+                  fill
+                  priority
+                  sizes="(max-width: 1023px) 100vw, 65vw"
+                  className="object-cover transition-transform duration-500 group-hover:scale-[1.02]"
+                />
+                <span className="absolute left-5 top-5 rounded-full bg-white/95 px-3 py-1 text-xs font-bold uppercase tracking-wide text-night-950">
+                  {leadCategory?.name ?? "Guide"}
+                </span>
+              </div>
+              <div className="p-6 sm:p-8">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
+                  Featured guide
+                </p>
+                <h3 className="mt-3 max-w-2xl font-display text-2xl font-bold leading-tight text-night-950 group-hover:text-brand-700 sm:text-3xl">
+                  {lead.title}
+                </h3>
+                {lead.excerpt && (
+                  <p className="mt-3 max-w-2xl text-base leading-7 text-ink-600">
+                    {lead.excerpt}
+                  </p>
+                )}
+                <span className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-brand-700">
+                  Read the guide
+                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                </span>
+              </div>
+            </Link>
+
+            {featured.length > 0 && (
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-1">
+                {featured.map((article, index) => (
+                  <ArticleCard
+                    key={article.documentId}
+                    article={article}
+                    priority={index === 0}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-10 text-center text-ink-600">
+            New guides are on the way. Check back soon.
+          </p>
+        )}
+      </section>
+
+      <section
+        aria-labelledby="latest-title"
+        className="border-y border-sand-200 bg-sand-50"
+      >
+        <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:py-20">
+          <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-700">
+                {HOMEPAGE_COPY.latestEyebrow}
+              </p>
+              <h2
+                id="latest-title"
+                className="mt-3 font-display text-3xl font-bold tracking-tight text-night-950 sm:text-4xl"
+              >
+                {HOMEPAGE_COPY.latestTitle}
+              </h2>
+            </div>
+            <p className="max-w-sm text-sm leading-6 text-ink-600 sm:text-right">
+              {HOMEPAGE_COPY.latestIntro}
+            </p>
+          </div>
+
+          {latest.length > 0 ? (
+            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {latest.map((article, index) => (
+                <ArticleCard
+                  key={article.documentId}
+                  article={article}
+                  priority={index === 0}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-2xl border border-dashed border-sand-200 bg-white p-10 text-center text-ink-600">
+              More field notes are being prepared.
+            </p>
+          )}
         </div>
       </section>
 
-      {/* Newsletter close — honest (no provider wired yet) */}
-      <section className="border-t border-ink-100 bg-brand-50">
-        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2 className="font-display text-3xl font-bold text-ink-950">
-              One money tip a week.
+      <section className="bg-night-950 text-sand-50">
+        <div className="mx-auto grid max-w-7xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:items-end lg:py-20">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sand-200">
+              {HOMEPAGE_COPY.trustEyebrow}
+            </p>
+            <h2 className="mt-3 max-w-md font-display text-3xl font-bold tracking-tight sm:text-4xl">
+              {HOMEPAGE_COPY.trustTitle}
             </h2>
-            <p className="mt-3 text-lg leading-8 text-ink-600">
-              The kind you can use at a border crossing. No spam, no course
-              upsell — unsubscribe in one click.
+            <p className="mt-4 max-w-md text-base leading-7 text-sand-200">
+              {HOMEPAGE_COPY.trustBody}
             </p>
-            <div className="mt-6 flex justify-center gap-2">
-              <Link
-                href="/editorial"
-                className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
-              >
-                Start with the best guides
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </div>
-            <p className="mt-3 text-xs text-ink-500">
-              Newsletter coming soon — for now, everything we publish is free on
-              the site.
-            </p>
+            <Link
+              href="/editorial"
+              className="mt-6 inline-flex items-center gap-2 text-sm font-bold text-sand-50 underline decoration-sand-200 underline-offset-4 hover:decoration-sand-50"
+            >
+              {HOMEPAGE_COPY.trustCta}
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
+
+          <dl className="grid gap-6 border-t border-sand-200/30 pt-8 sm:grid-cols-3 lg:border-t-0 lg:border-l lg:pl-10 lg:pt-0">
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-[0.18em] text-sand-200">
+                01 / Choose
+              </dt>
+              <dd className="mt-2 text-sm leading-6 text-sand-50">
+                Find places that fit the life you are building.
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-[0.18em] text-sand-200">
+                02 / Prepare
+              </dt>
+              <dd className="mt-2 text-sm leading-6 text-sand-50">
+                Know the rules, routes, costs, and practical details.
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-semibold uppercase tracking-[0.18em] text-sand-200">
+                03 / Go
+              </dt>
+              <dd className="mt-2 text-sm leading-6 text-sand-50">
+                Arrive with fewer surprises and more room to explore.
+              </dd>
+            </div>
+          </dl>
         </div>
       </section>
     </>

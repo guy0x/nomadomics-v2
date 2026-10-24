@@ -11,7 +11,7 @@ import { ImageResponse } from "next/og";
  * shipped misspelled headlines, and a site card is exactly the wrong place to
  * risk that.
  */
-export const alt = "Nomadomics — money tips for travelers";
+export const alt = "Nomadomics — travel guides for living well abroad";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -88,11 +88,11 @@ export default function OpengraphImage() {
               maxWidth: 980,
             }}
           >
-            Keep more of what you earn. Live wherever you want.
+            Make a life abroad that works in real life.
           </div>
           <div style={{ display: "flex", fontSize: 32, color: "#3d5a52", maxWidth: 900 }}>
-            No-fluff money guides: banking that doesn&apos;t bleed you, taxes you can
-            understand, and the real cost of every border.
+            Independent guides for choosing a base, planning the move, and setting up money
+            across borders.
           </div>
         </div>
 
@@ -110,7 +110,7 @@ export default function OpengraphImage() {
         >
           <div style={{ display: "flex" }}>nomadomics.blog</div>
           <div style={{ display: "flex", color: BRAND, fontWeight: 700 }}>
-            Banking · Taxes · Travel · Gear · Cities
+            Destinations · Logistics · Money
           </div>
         </div>
       </div>

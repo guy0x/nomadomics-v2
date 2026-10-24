@@ -14,7 +14,7 @@ export default function ArticleCard({ article, priority = false }: { article: St
   return (
     <Link
       href={`/${article.slug}`}
-      className="group flex flex-col overflow-hidden rounded-2xl border border-ink-200 bg-white transition-shadow hover:shadow-lg"
+      className="group flex flex-col overflow-hidden rounded-2xl border border-ink-200 bg-white transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-1 hover:border-brand-300 hover:shadow-xl"
     >
       <div className="relative aspect-[16/9] bg-brand-50">
         <Image

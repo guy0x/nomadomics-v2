@@ -7,10 +7,10 @@ import type { MetadataRoute } from "next";
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Nomadomics — money tips for travelers",
+    name: "Nomadomics — Travel Guides for Living Well Abroad",
     short_name: "Nomadomics",
     description:
-      "Practical guides to multi-currency banking, nomad taxes, and geoarbitrage — earn in one currency, live in another.",
+      "Independent guides for choosing a base, planning the move, and setting up money across borders.",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",
