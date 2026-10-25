@@ -73,22 +73,15 @@ def test_good_draft_has_meta_and_excerpt():
     assert report.excerpt
 
 
-def test_long_opener_draft_keeps_meta_and_excerpt():
-    """The excerpt must survive an opener that alone fills the 155c budget.
-
-    `test_good_draft_has_meta_and_excerpt` opens with a 40c sentence, so it never
-    reaches the boundary. On 2026-09-22 a house-voice article (226c opener)
-    published with `excerpt=""` — an empty card, no hero subtitle, empty RSS
-    description — and tripped the autopost content invariant, while this file
-    stayed green. Contract + monitor parity: tests/test_excerpt_invariant.py.
-    """
+def test_long_opener_draft_uses_complete_excerpt_and_meta():
+    """A long house-voice opener must not become a clipped card excerpt."""
     opener = (
         "Picture this: it is a Tuesday morning in Lisbon, the coworking space is "
         "still empty, and you have just opened a letter from the tax office that "
         "says you owe money in two countries at once, which is exactly the moment "
         "most digital nomads start looking for help."
     )
-    assert len(opener) > 155
+    assert len(opener) > 160
     body = (
         "# Best eSIM Travel Plans for Budget Nomads in 2026\n\n"
         f"{opener}\n\n"
@@ -99,13 +92,12 @@ def test_long_opener_draft_keeps_meta_and_excerpt():
     draft.used_facts = [f.claim for f in make_research().facts]
 
     report = analyze_seo(draft, "eSIM travel", research=make_research())
-    assert report.excerpt
-    assert len(report.excerpt) <= 220            # the monitor's card-length rule
-    assert report.excerpt.endswith(("…", ".", "!", "?"))
+    assert report.excerpt == "An eSIM fixes the cost side of that problem."
+    assert len(report.excerpt) <= 160
+    assert report.excerpt.endswith((".", "!", "?", ")"))
+    assert not report.excerpt.endswith(("...", "\u2026"))
     assert report.meta_description.endswith(".")
-    # sibling rules (t_7197386f): no trailing ellipsis — one-char OR three-dot —
-    # and the description must be authored copy, never the excerpt verbatim.
-    assert not report.meta_description.endswith(("…", "..."))
+    assert not report.meta_description.endswith(("\u2026", "..."))
     assert report.meta_description != report.excerpt
 
 
@@ -119,6 +111,23 @@ def _pad_sentence(target: int) -> str:
     if len(s) > target:
         s = s[:target].rsplit(" ", 1)[0]
     return s.rstrip() + "."
+
+
+def test_meta_desc_does_not_word_cut_a_long_opening_sentence():
+    from seo.analyze import _make_meta_desc
+
+    body = (
+        "# Satellite Internet for Nomads\n\n"
+        "Traditional cellular hotspots and local SIM cards are brilliant until you leave the asphalt behind. "
+        "If you are serious about working from unconventional coordinates without sacrificing your income, you need "
+        "to understand how satellite internet performs in the wild.\n\n"
+        "## Plans\nCompare the available options.\n"
+    )
+    md = _make_meta_desc(body, "satellite internet digital nomads")
+    assert 120 <= len(md) <= 160
+    assert md.endswith(".")
+    assert "unconventional." not in md
+    assert "unconventional coordinates" not in md
 
 
 def test_meta_desc_four_branches_never_echoes_the_excerpt():

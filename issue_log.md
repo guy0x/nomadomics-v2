@@ -201,3 +201,19 @@
 - First Vercel Git deployment failed because the Strapi Cloudflare tunnel returned HTTP 530 during build; local Strapi remained healthy (`/admin` HTTP 200).
 - Restored the tunnel through the configured cloudflared command, redeployed from the repository root, and received Vercel production deployment `dpl_H4wJSsj3t1za4Uif3mgx2En8HgP2` in `READY` state.
 - Live verification: `/editorial` HTTP 200; legacy `/about` HTTP 308; all four `/authors/*.jpeg` assets HTTP 200; live favicon SHA-256 matches the committed five-size ICO (`cda2fbfe…`); Editorial HTML contains all four portrait URLs and no `Project` label.
+
+## 2026-10-25 — Search metadata and excerpt repair (Guy request)
+
+- Audited the 53 published Nomadomics articles through authenticated Strapi; six published records had excerpts ending in a literal ellipsis, exposing truncated intro text in article headers/cards.
+- Repaired the six affected slugs: `digital-nomad-communities-every-major-hub`, `cost-of-living-buenos-aires-digital-nomads`, `cost-of-living-tbilisi-digital-nomads`, `portable-wifi-vs-esim-vs-local-sim`, `international-health-insurance-claims-abroad`, and `satellite-internet-for-digital-nomads`.
+- Replaced each excerpt with a complete, theme-specific summary and each `metaDescription` with search-oriented copy. Published-layer writes used explicit `?status=published`; readback verified all six document IDs and exact field values.
+- Post-repair corpus verification: 53/53 published excerpts are non-truncated; 53/53 meta descriptions are non-empty, 120–160 characters, terminally punctuated, and free of the migration-template/ellipsis defects.
+- Checked the current Nomadomics productization plan/spec and repository roadmap surface; no roadmap item is changed by this content-only repair. The first Vercel read was a stale ISR response (`x-vercel-cache: STALE`); after revalidation, the live satellite page returned the corrected excerpt and meta description (`x-vercel-cache: HIT`, age 57s).
+
+## 2026-10-25 — Pipeline prevention for excerpt/meta truncation (Guy request)
+
+- Hardened `engine/seo/analyze.py`: excerpts now select complete opening sentences only; long openers skip to a complete sentence or use a neutral topic fallback, never U+2026/`...` clipping. Meta descriptions now use complete opening-sentence windows or a topic-specific fallback, never a word-cut fragment.
+- Hardened the shared `engine/invariants.py` write/publish gate: rejects excerpt ellipses, over-cap/unpunctuated excerpts, and excerpt/meta values that are prefixes of longer body sentences. Both draft and daily publish lanes use this same gate.
+- Hardened the permanent `~/.hermes/scripts/nomadomics_content_invariants.py` monitor with the same 160-character excerpt / meta-description limits and clipped-prefix checks, so historical regressions alert even if they bypass the engine.
+- Added regression coverage for long house-voice openers, no-sentence bodies, clipped body prefixes, and the previous `...from unconventional.` meta failure. Full engine suite: **581 passed, 2 skipped**.
+- Updated `RUNBOOK.md` with the prevention contract and verification command. No roadmap item changed; this is a pipeline-quality hardening change.

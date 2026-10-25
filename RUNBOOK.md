@@ -267,6 +267,7 @@ reviewed migration.
 - **Link hygiene:** `link_hygiene_issues()` is wired into the shared
   `article_invariant_errors()` gate. Bare URLs, plain parenthesized URLs,
   hyphenated-slug anchors, and wrong-domain slug links block the write/publish.
+- **Excerpt/meta shape:** `engine/seo/analyze.py` selects complete opening sentences only; it never word-cuts or appends an ellipsis. If no complete sentence fits the 160-character excerpt cap, it uses a neutral topic fallback. `_make_meta_desc()` uses complete opening-sentence windows or a topic-specific fallback, never a clipped body fragment. `excerpt_issues()` and `meta_description_issues()` reject ellipsis endings, over-cap/unpunctuated copy, and values that are prefixes of longer body sentences.
 - **Shared enforcement:** `pipeline_cli.py` and `publish.py` call the same
   `article_invariant_errors()` implementation; a passing model score cannot
   bypass these deterministic checks.
@@ -278,7 +279,7 @@ Verification:
 
 ```bash
 cd ~/nomadomics-v2/engine
-env -u PYTHONPATH ../.venv/bin/python -m pytest tests/test_content_quality.py tests/test_body_citations.py tests/test_link_hygiene.py -q
+env -u PYTHONPATH ../.venv/bin/python -m pytest tests/test_content_quality.py tests/test_body_citations.py tests/test_link_hygiene.py tests/test_excerpt_invariant.py tests/test_write_invariants.py -q
 ```
 
 ## Daily content-production cadence (ARMED 2026-10-11)

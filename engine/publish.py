@@ -330,7 +330,9 @@ restructure.
    is a broken link and fails the publish gate.
    Prefer linking from the most relevant section.
 3. Refine metaTitle (≤60 chars) and metaDescription (≤160 chars) — make them
-   punchy, include the primary keyword, end metaDescription with a hook.
+   punchy, include the primary keyword, end metaDescription with a hook, and
+   write it as a complete standalone summary. Never copy a source sentence and
+   stop mid-thought merely to hit the character cap.
 4. Do NOT alter facts, stats, prices, structure, voice, headings, or add any
    new claims. Only add the TL;DR section, the links, and refine the two meta
    fields.

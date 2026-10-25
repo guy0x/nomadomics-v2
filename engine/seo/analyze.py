@@ -171,10 +171,13 @@ def analyze_seo(
     else:
         add(0, f"short ({wc} words)")
 
-    # Excerpt / meta length heuristics (use first sentence-derived values)
-    first_sentence = _first_sentence(body)
+    # Excerpt / meta length heuristics. Excerpts must be complete copy; they
+    # are rendered verbatim in cards, the hero subtitle, and RSS. A long
+    # house-voice opener must therefore fall through to the next complete
+    # sentence (or a neutral topic fallback), never to a clipped ellipsis.
     meta_title = _make_meta_title(prim, title_line)
     meta_desc = _make_meta_desc(body, prim)
+    first_sentence = _make_excerpt(body, prim)
     # 47c = the 60c SERP budget minus the 13c " · Nomadomics" brand suffix, so a
     # title in this band is served WITH the brand (t_7197386f).
     if 40 <= len(meta_title) <= META_TITLE_VALUE_MAX:
@@ -244,27 +247,60 @@ def analyze_seo(
 
 
 def _first_sentence(md: str) -> str:
-    text = re.sub(r"^#.*$", "", md, flags=re.M).strip()
+    """Return the first complete sentence that fits the excerpt budget.
+
+    This deliberately returns ``\"\"`` when every sentence is too long. The
+    caller uses ``_make_excerpt`` for a safe topic fallback; this low-level
+    helper never fabricates a sentence and never cuts one with an ellipsis.
+    """
+    text = re.sub(r"(?m)^#\s+.*$", "", md).strip()
+    # The excerpt is opening copy, not a sentence harvested from a later H2.
+    text = re.split(r"(?m)^\s*##\s+", text, maxsplit=1)[0].strip()
     text = re.sub(r"[#*`>]", "", text)
     if not text:
         return ""
-    # first 1-2 sentences up to ~160 chars
-    m = re.split(r"(?<=[.!?])\s+", text.replace("\n", " "))
+    # Prefer the earliest complete sentence that fits. If the opener is too
+    # long, skip it and continue looking rather than returning a clipped prefix.
+    sentences = re.split(r"(?<=[.!?])\s+", text.replace("\n", " "))
     out = ""
-    for s in m:
-        if len(out) + len(s) > 155:
+    for sentence in sentences:
+        s = sentence.strip()
+        if len(s) > 160:
+            if not out:
+                continue
             break
-        out += (s + " ")
-    out = out.strip()
-    if not out:
-        # The opener alone fills the budget (house-voice scene-setters run 180c+):
-        # cut it on a word boundary instead of returning "". An empty excerpt
-        # leaves the card / hero / RSS description blank and trips the content
-        # invariant, so this branch must always produce a sentence-shaped string.
-        head = text.replace("\n", " ").strip()
-        cut = head[:155].rsplit(" ", 1)[0].rstrip(" ,;:")
-        out = (cut or head[:154]).rstrip() + "\u2026"
-    return out
+        if not out:
+            out = s
+            continue
+        joined = f"{out} {s}"
+        if len(joined) > 160:
+            break
+        out = joined
+    return out if out.endswith((".", "!", "?", ")")) else ""
+
+
+def _make_excerpt(body: str, prim: str) -> str:
+    """Create a complete card excerpt without inventing article facts.
+
+    The old fallback cut a long opener at a word boundary and appended U+2026,
+    which made every house-voice article look truncated. Prefer complete prose;
+    if no sentence fits the schema cap, use a neutral topic-level summary that
+    is still complete and keeps the article out of the publish lane only when
+    even that safe fallback cannot fit.
+    """
+    excerpt = _first_sentence(body)
+    if excerpt:
+        return excerpt
+    if not _sentences(body):
+        # Headings-only or punctuation-free bodies contain no prose to quote.
+        return ""
+    title = next((l[2:].strip() for l in (body or "").splitlines() if l.startswith("# ")), "")
+    topic = re.sub(r"\s+", " ", (prim or title or "this topic")).strip()
+    fallback = (
+        f"Practical guidance on {topic}, with the key decisions and steps "
+        "digital nomads should consider."
+    )
+    return fallback if len(fallback) <= 160 else ""
 
 
 # Meta budgets (t_7197386f). The SERP title budget is 60c INCLUDING the
@@ -341,31 +377,41 @@ def _make_meta_desc(body: str, prim: str) -> str:
 
     The old generator had exactly three outcomes and none was authored copy —
     `md == excerpt` for 140-160c openers, the WordPress-migration tail
-    ` Learn how to save money on <prim>.` for short openers, and a mid-word
-    `s[:157] + "..."` cut over 160c (proved live 2026-09-28). The excerpt is the
-    opener PLUS whatever fits under its ~155c budget, so the description must
-    draw from a DIFFERENT window: it starts at sentence 2 and only falls back to
-    the opener when the body text is too thin to fill the band on its own
-    (the two strings still differ, the description being longer). `prim` is kept
-    for call compatibility; it is never appended as a template.
+    ` Learn how to save money on <prim>` for short openers, and a mid-sentence
+    word cut over 160c (proved live 2026-09-28). The description now uses only
+    complete opening sentences; when no complete sentence window fits 120-160c,
+    it emits a deterministic topic-level summary instead of clipping prose.
+    `prim` is kept for call compatibility and anchors that fallback summary.
     """
-    sentences = _sentences(body)
+    # Keep list bullets and later section copy out of the fallback window. They
+    # can be syntactically complete while being the wrong search summary (for
+    # example, a TL;DR bullet about refundability).
+    opening = re.split(r"(?m)^\s*##\s+", body or "", maxsplit=1)[0]
+    sentences = _sentences(opening)
     if not sentences:
         return _fit_meta_desc("")
     window = sentences[1:] if len(sentences) > 1 else sentences
-    desc = ""
-    for next_sentence in window:
-        joined = f"{desc} {next_sentence}".strip()
-        if len(joined) > META_DESC_MAX:
-            if len(desc) < META_DESC_MIN:
-                desc = f"{desc} {_word_prefix(next_sentence, META_DESC_MAX - len(desc) - 1)}".strip()
-            break
-        desc = joined
-        if len(desc) >= META_DESC_MIN:
-            break
-    if len(desc) < META_DESC_MIN and len(sentences) > 1:
-        desc = f"{sentences[0]} {desc}".strip()
-    return _fit_meta_desc(desc)
+    # Only join complete sentences. A word-prefix cut can end in punctuation
+    # while still publishing a semantic fragment (for example, ``...from
+    # unconventional.``), which is exactly the defect this contract prevents.
+    for start in range(len(window)):
+        desc = ""
+        for candidate in window[start:]:
+            joined = f"{desc} {candidate}".strip()
+            if len(joined) > META_DESC_MAX:
+                break
+            desc = joined
+            if len(desc) >= META_DESC_MIN:
+                return _fit_meta_desc(desc)
+
+    # No complete-sentence window fits the SERP band. Use a deterministic,
+    # topic-specific fallback rather than trimming a sentence mid-thought.
+    topic = re.sub(r"\s+", " ", (prim or "this topic")).strip()
+    fallback = (
+        f"{topic}: understand the key rules, costs, options, and trade-offs "
+        "before making a confident decision for digital nomad life and remote work."
+    )
+    return _fit_meta_desc(fallback)
 
 
 def _voice_score(body: str) -> int:

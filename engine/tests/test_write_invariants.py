@@ -75,6 +75,32 @@ def test_meta_shapes_are_refused_by_name():
     errors = check_write_invariants({**base, "metaDescription": mid}, _two())
     assert any("terminal punctuation" in e for e in errors)
 
+    # excerpt shape: literal ellipses and unfinished/oversized card copy are
+    # write-time failures, not merely monitor findings.
+    errors = check_write_invariants({**base, "excerpt": "A clipped card summary…"}, _two())
+    assert any("excerpt ends in an ellipsis" in e for e in errors)
+    errors = check_write_invariants({**base, "excerpt": "unfinished card summary"}, _two())
+    assert any("excerpt lacks terminal punctuation" in e for e in errors)
+    errors = check_write_invariants({**base, "excerpt": "x" * 161}, _two())
+    assert any("excerpt exceeds" in e for e in errors)
+
+    clipped_body = (
+        "Satellite internet helps remote workers stay connected in remote places "
+        "without relying on local cell towers."
+    )
+    errors = check_write_invariants(
+        {**base, "bodyMarkdown": clipped_body,
+         "excerpt": "Satellite internet helps remote workers stay connected in remote."},
+        _two(),
+    )
+    assert any("excerpt is a clipped body prefix" in e for e in errors)
+    errors = check_write_invariants(
+        {**base, "bodyMarkdown": clipped_body,
+         "metaDescription": "Satellite internet helps remote workers stay connected in remote."},
+        _two(),
+    )
+    assert any("metaDescription is a clipped body prefix" in e for e in errors)
+
     # the clean fixture is untouched by all the above rules
     assert check_write_invariants(base, _two()) == []
 

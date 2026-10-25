@@ -249,7 +249,7 @@ def test_draft_one_autopublishes_when_flag_on_nonsensitive_high_conf(monkeypatch
                 "This guide compares the practical numbers so you can pick a base "
                 "before you book a flight."
             ),
-            excerpt="Z",
+            excerpt="Z.",
         ),
     )
 
@@ -330,7 +330,7 @@ def test_draft_one_blocks_autopublish_without_browser_receipt(monkeypatch, tmp_p
                 "This guide compares the practical numbers so you can pick a base "
                 "before you book a flight."
             ),
-            excerpt="Z",
+            excerpt="Z.",
         ),
     )
 

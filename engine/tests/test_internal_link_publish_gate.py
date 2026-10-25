@@ -420,7 +420,7 @@ def test_draft_lane_autopublish_blocked_below_internal_floor(monkeypatch, tmp_pa
         pipeline_cli, "analyze_seo",
         lambda draft, pk, secondary_keywords=None, research=None: SEOReport(
             seo_score=85, confidence=90, meta_title="X",
-            meta_description=VALID_DESC, excerpt="Z",
+            meta_description=VALID_DESC, excerpt="Z.",
         ),
     )
 

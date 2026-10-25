@@ -16,8 +16,8 @@ was live in production.
 These tests pin both halves of the contract:
 
   * the engine always returns a card-shaped excerpt for prose — over-budget
-    openers are cut on a word boundary and closed with U+2026, while a genuinely
-    prose-free body still returns "" so a real content gap stays visible;
+    openers select a complete sentence or use a neutral topic fallback, while a
+    genuinely prose-free body still returns "" so a real content gap stays visible;
   * the monitor's OWN rules accept the result. The monitor is imported by path
     and its `check_article` is called for real (network + artifacts stubbed), so
     the engine and the invariant cannot drift apart silently. Nothing here
@@ -33,7 +33,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from research.research import Fact, ResearchResult  # noqa: E402
-from seo.analyze import _first_sentence, analyze_seo  # noqa: E402
+from seo.analyze import _first_sentence, _make_excerpt, analyze_seo  # noqa: E402
 from writer.writer import ArticleDraft  # noqa: E402
 
 SLUG = "best-virtual-mailbox-nomads"
@@ -43,13 +43,13 @@ MONITOR_PATH = Path(os.environ.get(
 ))
 
 # The monitor's excerpt rule, asserted below against the real `check_article`:
-# non-empty, <= 220c, closing on sentence punctuation.
-EXCERPT_MAX = 220
-EXCERPT_ENDINGS = (".", "!", "?", "\u2026")
+# non-empty, <=160c, closing on sentence punctuation, never an ellipsis cut.
+EXCERPT_MAX = 160
+EXCERPT_ENDINGS = (".", "!", "?", ")")
 
 # The exact shape that broke production: a house-voice scene-setter whose first
-# sentence alone is 226c, i.e. past the 155c budget `_first_sentence` accumulates
-# within. `test_the_fixture_actually_crosses_the_budget_boundary` keeps it honest.
+# sentence alone is 226c, i.e. past the 160c excerpt schema budget. The engine
+# must select the next complete sentence or use its neutral fallback.
 HOUSE_VOICE_OPENER = (
     "Picture this: it is a Tuesday morning in Lisbon, the coworking space is still "
     "empty, and you have just opened a letter from the tax office that says you owe "
@@ -107,11 +107,17 @@ def report_for(body: str):
 
 
 PROSE_CASES = [
-    ("house-voice opener (the production failure)", HOUSE_VOICE_OPENER),
+    (
+        "house-voice opener (the production failure)",
+        HOUSE_VOICE_OPENER + "\n\nAn eSIM fixes the cost side of that problem.",
+    ),
     ("two short sentences inside the budget", "You land in Tokyo. The roaming bill arrives the next morning."),
     ("single sentence one char over the budget", "x" * 155 + "."),
-    ("300c with no space to cut on", "x" * 300),
-    ("h1 plus an over-budget opener", "# Best eSIM Plans for Nomads\n\n" + HOUSE_VOICE_OPENER),
+    (
+        "h1 plus an over-budget opener",
+        "# Best eSIM Plans for Nomads\n\n" + HOUSE_VOICE_OPENER
+        + "\n\nAn eSIM fixes the cost side of that problem.",
+    ),
     ("em-dash scene setter", "You land in Bangkok \u2014 and the roaming bill lands with you, all of it."),
 ]
 
@@ -119,6 +125,7 @@ PROSE_FREE_CASES = [
     ("empty body", ""),
     ("whitespace only", "   \n\n  "),
     ("headings only, no prose", "# Title\n\n## Section\n\n### Sub\n"),
+    ("300c with no sentence boundary", "x" * 300),
 ]
 
 
@@ -194,13 +201,12 @@ def test_the_heading_is_not_counted_against_the_excerpt_budget():
     assert _first_sentence("# Best eSIM Plans for Nomads\n\nShort opener here.") == "Short opener here."
 
 
-def test_over_budget_opener_is_cut_on_a_word_boundary():
-    excerpt = _first_sentence(HOUSE_VOICE_OPENER)
-    stem = excerpt[:-1].rstrip(" ,;:")
-    assert excerpt.endswith("\u2026")
-    assert not excerpt[:-1].endswith(" ")          # no dangling space before the ellipsis
-    assert HOUSE_VOICE_OPENER.startswith(stem)     # a pure prefix cut, nothing reordered
-    assert stem.split() == HOUSE_VOICE_OPENER.split()[: len(stem.split())]   # whole words only
+def test_over_budget_opener_uses_a_complete_sentence():
+    excerpt = _make_excerpt(article_body(HOUSE_VOICE_OPENER), "esim travel")
+    assert excerpt == "An eSIM fixes the cost side of that problem."
+    assert len(excerpt) <= EXCERPT_MAX
+    assert not excerpt.endswith(("...", "\u2026"))
+    assert excerpt.endswith(EXCERPT_ENDINGS)
 
 
 # --------------------------------------------------------------------- invariant

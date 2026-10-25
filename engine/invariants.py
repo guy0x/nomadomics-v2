@@ -33,6 +33,7 @@ META_DESC_MIN = 120
 META_DESC_MAX = 160
 META_TITLE_MAX = 60
 META_TITLE_VALUE_MAX = 47
+EXCERPT_MAX = 160
 _TEMPLATE_TAIL_RE = re.compile(r"Learn how to save money on", re.I)
 _ELLIPSIS_ENDS = ("...", "\u2026")
 _TERMINAL_ENDS = (".", "!", "?", ")")
@@ -96,7 +97,20 @@ def meta_title_issues(meta_title: str) -> list[str]:
     return issues
 
 
-def meta_description_issues(meta_description: str, excerpt: str) -> list[str]:
+def _looks_like_clipped_body_prefix(value: str, body: str) -> bool:
+    """Detect copy that ends at punctuation but is a prefix of body prose."""
+    needle = _norm_spaces(value).rstrip(".!?")
+    if not needle or not body:
+        return False
+    prose = re.sub(r"(?m)^\s*#{1,6}\s+.*$", "", body)
+    prose = re.sub(r"[#*`>]", "", prose).replace("\n", " ")
+    for sentence in re.split(r"(?<=[.!?])\s+", _norm_spaces(prose)):
+        if len(sentence) > len(needle) + 8 and sentence.lower().startswith(needle.lower()):
+            return True
+    return False
+
+
+def meta_description_issues(meta_description: str, excerpt: str, body: str = "") -> list[str]:
     """Named metaDescription shape failures (t_7197386f): the three shapes the
     old generator could only produce — excerpt-duplicate, the WordPress-migration
     template tail, and a literal ellipsis cut — plus the length and terminal
@@ -116,6 +130,25 @@ def meta_description_issues(meta_description: str, excerpt: str) -> list[str]:
         issues.append(f"metaDescription outside {META_DESC_MIN}-{META_DESC_MAX}c")
     if md and not md.endswith(_TERMINAL_ENDS):
         issues.append("metaDescription lacks terminal punctuation")
+    if _looks_like_clipped_body_prefix(md, body):
+        issues.append("metaDescription is a clipped body prefix")
+    return issues
+
+
+def excerpt_issues(excerpt: str, body: str = "") -> list[str]:
+    """Reject card copy that is clipped, oversized, or unfinished."""
+    ex = _norm_spaces(excerpt)
+    if not ex:
+        return []
+    issues = []
+    if ex.endswith(_ELLIPSIS_ENDS):
+        issues.append("excerpt ends in an ellipsis cut")
+    if len(ex) > EXCERPT_MAX:
+        issues.append(f"excerpt exceeds the {EXCERPT_MAX}c schema budget")
+    if not ex.endswith(_TERMINAL_ENDS):
+        issues.append("excerpt lacks terminal punctuation")
+    if _looks_like_clipped_body_prefix(ex, body):
+        issues.append("excerpt is a clipped body prefix")
     return issues
 
 
@@ -125,6 +158,8 @@ def check_write_invariants(article: dict, citations: list | None = None, fetch=N
     errors: list[str] = []
     if not str(article.get("excerpt") or "").strip():
         errors.append("empty excerpt")
+    body = str(article.get("bodyMarkdown") or "")
+    errors.extend(excerpt_issues(str(article.get("excerpt") or ""), body))
     if not str(article.get("metaTitle") or "").strip() or not str(article.get("metaDescription") or "").strip():
         errors.append("empty meta")
     errors.extend(meta_title_issues(str(article.get("metaTitle") or "")))
@@ -132,6 +167,7 @@ def check_write_invariants(article: dict, citations: list | None = None, fetch=N
         meta_description_issues(
             str(article.get("metaDescription") or ""),
             str(article.get("excerpt") or ""),
+            body,
         )
     )
     slug = str(article.get("slug") or "")
@@ -361,6 +397,7 @@ def article_invariant_errors(
             "metaTitle": article.get("metaTitle"),
             "metaDescription": article.get("metaDescription"),
             "slug": article.get("slug"),
+            "bodyMarkdown": body,
         },
         [{"url": u} for u in body_citation_urls(body)],
         fetch=fetch,
