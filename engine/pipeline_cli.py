@@ -186,6 +186,12 @@ def _ship_cover_art(client, slug: str, title: str) -> str:
 # 2026-09-18 — one leaked by the production timeout, one by a killed trigger).
 INFLIGHT_STATUSES = ("researching", "drafting")
 
+# Terminal topic statuses a finished draft_one run can record (the checkpoint's
+# topicStatus): REJECT -> failed, QUARANTINE / NEEDS_REVIEW -> in_review,
+# AUTO_PUBLISH -> published. A stranded in-flight topic whose article already
+# exists is completed to its JOURNALED terminal status — never to a guess.
+TERMINAL_TOPIC_STATUSES = ("in_review", "published", "failed")
+
 # Terminal statuses are never candidates: `in_review`/`published` already have an
 # article and `failed` is an explicit verdict — resetting one would re-draft a
 # finished topic.
@@ -360,10 +366,14 @@ def reclaim_stale_topics(
 
     Runs at the start of every batch, before the pending queue is listed. Bounded:
     one filtered read plus one PUT per genuinely stale topic; no new state file
-    (pipeline.jsonl stays the single journal). Two hard safety rules:
+    (pipeline.jsonl stays the single journal). Three hard safety rules:
 
-    * a topic in a terminal status is never touched, and
-    * a slug with an `article_created` row is never reset (no duplicate articles).
+    * a topic in a terminal status is never touched,
+    * a slug with an `article_created` row is never reset to `pending`
+      (no duplicate articles) — it is COMPLETED to its journaled terminal
+      status when the checkpoint vouches for one (`reclaim_attached`),
+      and only ever skipped when nothing certain is known, and
+    * an undatable in-flight row is left alone (fail safe).
     """
     threshold = STALE_INFLIGHT_SECONDS if threshold_seconds is None else threshold_seconds
     now = now or _dt.datetime.now(_dt.timezone.utc)
@@ -385,6 +395,39 @@ def reclaim_stale_topics(
         if age < threshold:
             continue  # inside its budget window -> a live run still owns it
         if slug in already_written:
+            # An article exists, so the topic is never reset to `pending` (no
+            # duplicate articles). But if the checkpoint vouches for the terminal
+            # status the finished run recorded, the only missing step is the
+            # topic flip itself — COMPLETE it instead of skipping forever: a
+            # plain skip leaves the topic in-flight for good, burning a
+            # reclaim_skipped row every single run (live 2026-10-20..26:
+            # schengen-90-180-rule-digital-nomads, stuck in `drafting` after a
+            # killed manual re-run). No checkpoint verdict -> keep the skip
+            # (fail-safe; nothing certain to complete).
+            terminal = _journal_topic_terminal(slug, state_file)
+            if terminal:
+                client.update_topic(doc_id, {"status": terminal, "lastError": None})
+                reclaimed.append(
+                    {
+                        "slug": slug,
+                        "from": status,
+                        "to": terminal,
+                        "attached": True,
+                        "ageSeconds": round(age, 1),
+                    }
+                )
+                _append_state(
+                    {
+                        "ts": _now_iso(),
+                        "event": "reclaim_attached",
+                        "slug": slug,
+                        "from": status,
+                        "to": terminal,
+                        "ageSeconds": round(age, 1),
+                        "documentId": doc_id,
+                    }
+                )
+                continue
             _append_state(
                 {
                     "ts": _now_iso(),
@@ -438,6 +481,38 @@ def _journal_slug_counts(state_file: Path | None, event: str) -> dict[str, int]:
                 slug = entry["slug"]
                 counts[slug] = counts.get(slug, 0) + 1
     return counts
+
+
+def _journal_topic_terminal(slug: str, state_file: Path | None = None) -> str | None:
+    """Terminal topic status vouched by the slug's LAST `article_completed` row.
+
+    draft_one writes the checkpoint (event `article_completed`, `topicStatus`=
+    <terminal>) as its LAST durable write, after the topic row itself was
+    flipped. A run killed between article creation and the topic flip therefore
+    leaves the topic in-flight while the checkpoint still vouches for the
+    terminal status the finished run recorded. Anyone completing such a
+    stranded topic trusts ONLY this journaled verdict — never a guess — and
+    completes nothing when the verdict is missing or not a known terminal
+    status. Returns None in every not-certain case.
+    """
+    path = state_file or STATE_FILE
+    if not path.exists():
+        return None
+    terminal = None
+    with path.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue  # a killed run can leave a torn final line
+            if entry.get("event") == CHECKPOINT_EVENT and entry.get("slug") == slug:
+                status = entry.get("topicStatus")
+                if isinstance(status, str) and status in TERMINAL_TOPIC_STATUSES:
+                    terminal = status
+    return terminal
 
 
 def _one_line(text, limit: int = 60) -> str:
@@ -801,6 +876,54 @@ def draft_one(client: StrapiClient, cfg: Config, slug: str) -> dict:
     if not topic_doc:
         raise StrapiError(f"topic not found: {slug}")
     topic = _topic_payload(topic_doc)
+
+    # Duplicate guard (t_b01e56f4, 2026-10-26): draft_one is reachable BY HAND
+    # (`engine.cli draft-one <slug>`) for any slug in any topic status, and a
+    # re-draft of a slug whose article already exists burns the full paid
+    # pipeline and then writes a DUPLICATE article the engine token could never
+    # delete. The veto is journal-first (an `article_created` row is written
+    # only AFTER the Strapi create succeeded, and the engine token cannot
+    # delete) with a live working-layer lookup as belt-and-braces for slugs
+    # whose article predates the journal. The stranded topic is completed to
+    # its journaled terminal status instead — the exact transition the killed
+    # run never reached. Duck-typed getattr, same pattern as the internal-link
+    # corpus backstop: a client without the finder degrades to journal-only.
+    _dup_source = None
+    if slug in _article_created_slugs():
+        _dup_source = "journal"
+    else:
+        _article_finder = getattr(client, "find_article_document_id_by_slug", None)
+        if _article_finder is not None:
+            try:
+                _dup_source = "live" if _article_finder(slug) else None
+            except StrapiError:
+                _dup_source = None  # unreachable CMS: guard degrades, run proceeds
+    if _dup_source:
+        _terminal = _journal_topic_terminal(slug) or "in_review"
+        client.update_topic(
+            topic["documentId"], {"status": _terminal, "lastError": None}
+        )
+        _append_state(
+            {
+                "ts": _now_iso(),
+                "event": "draft_skipped_duplicate",
+                "slug": slug,
+                "topicStatus": _terminal,
+                "source": _dup_source,
+            }
+        )
+        return {
+            "slug": slug,
+            "title": topic["title"],
+            "articleDocumentId": None,
+            "duplicate": True,
+            "topicStatus": _terminal,
+            "decision": "duplicate_skip",
+            "confidence": 0,
+            "published": False,
+            "words": 0,
+            "edit_report": "",
+        }
 
     # mark researching
     client.update_topic(topic["documentId"], {"status": "researching"})

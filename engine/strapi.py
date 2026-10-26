@@ -177,6 +177,30 @@ class StrapiClient:
     # budget on duplicates — ask for 2x and dedupe.
     _DRAFT_QUERY_PAGE_MULTIPLIER = 2
 
+    def find_article_document_id_by_slug(self, slug: str) -> Optional[str]:
+        """documentId of the working-layer article carrying `slug`, or None.
+
+        Draft-layer read (`?status=draft`, see ARTICLE_DRAFT_LAYER): a read that
+        omits the param sees stale published-layer mirrors instead of the working
+        copies (verified live 2026-09-25). Used by the draft_one duplicate guard —
+        an article that already exists must never be re-drafted (the engine token
+        has no delete, so a duplicate could not even be cleaned up).
+        """
+        data = self._request(
+            "GET",
+            "/api/articles",
+            params={
+                "status": self.ARTICLE_DRAFT_LAYER,
+                "filters[slug][$eq]": slug,
+                "pagination[pageSize]": 1,
+            },
+        )
+        rows = data.get("data", [])
+        if not rows:
+            return None
+        doc_id = rows[0].get("documentId")
+        return str(doc_id) if doc_id else None
+
     def list_published_titles(self, limit: int = 200) -> list[dict]:
         """Published articles as {slug, title} pairs — the internal-link corpus.
 
