@@ -24,7 +24,10 @@ import Image from "next/image";
 import { Clock, ChevronRight } from "@/components/Icons";
 
 export const revalidate = 300;
-export const dynamicParams = true;
+// Only build-verified published slugs may resolve. Publishing also ships its
+// cover-art commit, which triggers the deployment that adds a new static path.
+// This keeps typoed URLs as real HTTP 404s rather than streamed soft 404s.
+export const dynamicParams = false;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 

@@ -11,7 +11,9 @@ import AuthorAvatar from "@/components/AuthorAvatar";
 import { ChevronRight } from "@/components/Icons";
 
 export const revalidate = 300;
-export const dynamicParams = true;
+// Author pages are generated from the verified roster at build time. Reject
+// unknown slugs at the router so they receive a real HTTP 404.
+export const dynamicParams = false;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 const DEFAULT_OG_IMAGE = "/opengraph-image";

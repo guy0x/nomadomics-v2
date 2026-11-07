@@ -8,6 +8,9 @@ import CategoryIcon from "@/components/CategoryIcon";
 import { ChevronRight } from "@/components/Icons";
 
 export const revalidate = 300;
+// Categories are a fixed local taxonomy, so an unknown category is a routing
+// error—not a streamed page-level notFound that would respond HTTP 200.
+export const dynamicParams = false;
 
 export async function generateStaticParams() {
   return CATEGORIES.map((c) => ({ slug: c.slug }));
