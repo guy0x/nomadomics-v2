@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+const DEFAULT_OG_IMAGE = "/opengraph-image";
+const DEFAULT_OG_ALT = "Nomadomics — travel guides for living well abroad";
+
 export const metadata: Metadata = {
   title: "Nomadomics Project Case Study",
   description:
@@ -10,6 +13,14 @@ export const metadata: Metadata = {
     description:
       "An employer-facing case study of the Nomadomics content product and publishing system.",
     type: "article",
+    images: [{ url: DEFAULT_OG_IMAGE, width: 1200, height: 630, alt: DEFAULT_OG_ALT }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Nomadomics Project Case Study",
+    description:
+      "An employer-facing case study of the Nomadomics content product and publishing system.",
+    images: [DEFAULT_OG_IMAGE],
   },
 };
 

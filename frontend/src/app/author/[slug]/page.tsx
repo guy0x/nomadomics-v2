@@ -14,6 +14,8 @@ export const revalidate = 300;
 export const dynamicParams = true;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+const DEFAULT_OG_IMAGE = "/opengraph-image";
+const DEFAULT_OG_ALT = "Nomadomics — travel guides for living well abroad";
 
 export async function generateStaticParams() {
   const authors = await getAuthors();
@@ -40,7 +42,19 @@ export async function generateMetadata({
     title,
     description,
     alternates: { canonical: url },
-    openGraph: { title: `${title} · Nomadomics`, description, url, type: "profile" },
+    openGraph: {
+      title: `${title} · Nomadomics`,
+      description,
+      url,
+      type: "profile",
+      images: [{ url: DEFAULT_OG_IMAGE, width: 1200, height: 630, alt: DEFAULT_OG_ALT }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: `${title} · Nomadomics`,
+      description,
+      images: [DEFAULT_OG_IMAGE],
+    },
   };
 }
 
