@@ -34,6 +34,7 @@ from llm import (
 from strapi import StrapiClient, StrapiError
 from invariants import (
     article_invariant_errors,
+    cannibalization_warnings,
     ensure_internal_links,
     internal_link_issues,
     link_hygiene_issues,
@@ -54,6 +55,15 @@ CARD_W, CARD_H = 1200, 630
 GEMINI_CARD_SIZE = (1200, 675)
 GEMINI_OG_SIZE = (1200, 630)
 GEMINI_MAX_BYTES = 500_000
+# The supervised cover worker is the trust boundary. Both its historical
+# Gemini-web route and its approved Higgsfield route emit the same signed-off
+# local receipt, deterministic derivatives, and independent vision QA.
+# Keep this allowlist exact: a ready-looking hand-authored manifest must never
+# become a generic bypass of the cover gate.
+APPROVED_COVER_RECEIPT_PROVIDERS = frozenset({
+    "gemini-web",
+    "higgsfield:xai/grok-imagine-image-2.0",
+})
 MIN_CONFIDENCE = 75
 
 # --- asset shipping + verification (2026-09-20, kanban t_69dcb49a) -----------
@@ -621,6 +631,21 @@ def disclaimer_gate_class(article: dict, journal: set[str] | None = None) -> boo
     if article_decision(article) in QUARANTINED_DECISIONS:
         return True
     return bool(journal and article.get("documentId") in journal)
+
+
+def _cannibalization_warnings(article: dict, published_corpus: list[dict]) -> list[str]:
+    """Advisory keyword-overlap warnings (claude-blog port G2, 2026-10-24).
+
+    Journal-only telemetry — never blocks a publish and never raises into the
+    lane: a bug here must degrade to silence, not to a failed 13:00 run. The
+    digest reads the ``cannibalization_warning`` events this feeds.
+    """
+    try:
+        return cannibalization_warnings(
+            article, published_corpus or [],
+            own_slug=str(article.get("slug") or ""))
+    except Exception:  # noqa: BLE001 — advisory must never break the lane
+        return []
 
 
 def _skip_reason(event: str, reason: str) -> dict:
@@ -1209,8 +1234,9 @@ def browser_asset_ready(slug: str) -> tuple[bool, str]:
     record = _gemini_asset_manifest().get(slug)
     if not isinstance(record, dict):
         return False, "no browser-Gemini manifest record"
-    if record.get("status") != "ready" or record.get("provider") != "gemini-web":
-        return False, "browser-Gemini receipt is not ready"
+    provider = str(record.get("provider") or "")
+    if record.get("status") != "ready" or provider not in APPROVED_COVER_RECEIPT_PROVIDERS:
+        return False, "approved cover-worker receipt is not ready"
     qa = record.get("qa")
     if not isinstance(qa, dict) or qa.get("verdict") != "pass":
         return False, "browser-Gemini visual QA did not pass"
@@ -1234,7 +1260,7 @@ def browser_asset_ready(slug: str) -> tuple[bool, str]:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if digest != meta.get("sha256"):
             return False, f"{kind} SHA-256 mismatch"
-    return True, "browser-Gemini asset receipt verified"
+    return True, "approved cover asset receipt verified"
 
 
 # ----------------------------------------------------------------------------
@@ -1410,6 +1436,19 @@ def publish_one(
     if not slug or not doc_id:
         return {"event": "skip", "reason": f"article missing slug/docId: {slug}"}
 
+    # Keyword-cannibalization advisory (claude-blog port G2, 2026-10-24):
+    # journal-only, NEVER blocking — surfaces in the digest so a veto or a
+    # differentiate/merge call can happen before the collision compounds.
+    # Blocking flip lands after the plan's 1-week advisory soak.
+    cannibalization = _cannibalization_warnings(winner, published_corpus)
+    if cannibalization:
+        _append_state({
+            "ts": _now_iso(),
+            "event": "cannibalization_warning",
+            "slug": slug,
+            "warnings": cannibalization,
+        })
+
     # Hard refuse (defense in depth): even if a quarantine-class article is
     # somehow selected here (legacy record with a missing topicDecision that a
     # concurrent actor flips to quarantine, a future code path, a manual
@@ -1434,6 +1473,8 @@ def publish_one(
         "docId": doc_id,
         "confidence": winner.get("confidence"),
     }
+    if cannibalization:
+        result["cannibalization_warnings"] = cannibalization
 
     # --- polish ---
     related = pick_link_targets(list_published(client))
