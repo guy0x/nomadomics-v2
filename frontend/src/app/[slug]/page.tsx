@@ -24,10 +24,10 @@ import Image from "next/image";
 import { Clock, ChevronRight } from "@/components/Icons";
 
 export const revalidate = 300;
-// Only build-verified published slugs may resolve. Publishing also ships its
-// cover-art commit, which triggers the deployment that adds a new static path.
-// This keeps typoed URLs as real HTTP 404s rather than streamed soft 404s.
-export const dynamicParams = false;
+// Generate known pages at build time, but allow a newly published, verified slug
+// to be rendered through ISR before the next deployment observes it. Unknown
+// slugs still call `notFound()` after the scoped Strapi lookup and remain 404.
+export const dynamicParams = true;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
