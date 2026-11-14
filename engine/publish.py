@@ -34,7 +34,6 @@ from llm import (
 from strapi import StrapiClient, StrapiError
 from invariants import (
     article_invariant_errors,
-    cannibalization_warnings,
     ensure_internal_links,
     internal_link_issues,
     link_hygiene_issues,
@@ -631,21 +630,6 @@ def disclaimer_gate_class(article: dict, journal: set[str] | None = None) -> boo
     if article_decision(article) in QUARANTINED_DECISIONS:
         return True
     return bool(journal and article.get("documentId") in journal)
-
-
-def _cannibalization_warnings(article: dict, published_corpus: list[dict]) -> list[str]:
-    """Advisory keyword-overlap warnings (claude-blog port G2, 2026-10-24).
-
-    Journal-only telemetry — never blocks a publish and never raises into the
-    lane: a bug here must degrade to silence, not to a failed 13:00 run. The
-    digest reads the ``cannibalization_warning`` events this feeds.
-    """
-    try:
-        return cannibalization_warnings(
-            article, published_corpus or [],
-            own_slug=str(article.get("slug") or ""))
-    except Exception:  # noqa: BLE001 — advisory must never break the lane
-        return []
 
 
 def _skip_reason(event: str, reason: str) -> dict:
@@ -1436,19 +1420,6 @@ def publish_one(
     if not slug or not doc_id:
         return {"event": "skip", "reason": f"article missing slug/docId: {slug}"}
 
-    # Keyword-cannibalization advisory (claude-blog port G2, 2026-10-24):
-    # journal-only, NEVER blocking — surfaces in the digest so a veto or a
-    # differentiate/merge call can happen before the collision compounds.
-    # Blocking flip lands after the plan's 1-week advisory soak.
-    cannibalization = _cannibalization_warnings(winner, published_corpus)
-    if cannibalization:
-        _append_state({
-            "ts": _now_iso(),
-            "event": "cannibalization_warning",
-            "slug": slug,
-            "warnings": cannibalization,
-        })
-
     # Hard refuse (defense in depth): even if a quarantine-class article is
     # somehow selected here (legacy record with a missing topicDecision that a
     # concurrent actor flips to quarantine, a future code path, a manual
@@ -1473,9 +1444,6 @@ def publish_one(
         "docId": doc_id,
         "confidence": winner.get("confidence"),
     }
-    if cannibalization:
-        result["cannibalization_warnings"] = cannibalization
-
     # --- polish ---
     related = pick_link_targets(list_published(client))
     polished: dict | None = None
